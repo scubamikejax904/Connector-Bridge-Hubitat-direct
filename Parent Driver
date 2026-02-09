@@ -1,0 +1,301 @@
+/**
+ * Connector WLAN Integration - Full Production
+ * DD7006 Compatible - Final Corrected Version
+ */
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+import hubitat.helper.HexUtils
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec // THIS LINE WAS MISSING
+
+metadata {
+    definition(name: "Connector WLAN Integration (Full)", namespace: "connector", author: "Scubamikejax904 & Manus") {
+        capability "Initialize"
+        capability "Refresh"
+        command "discoverDevices"
+    }
+    preferences {
+        input name: "bridgeIp", type: "text", title: "Bridge IP", required: true
+        input name: "bridgeKey", type: "text", title: "Bridge Key (16-char string from app, with hyphens)", required: true
+        input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
+    }
+}
+
+/* -------------------------------------------------- */
+def installed() { initialize() }
+def updated() { unschedule(); initialize() }
+
+def initialize() {
+    logDebug "Initializing..."
+    state.token = null
+    state.commandQueue = []
+    runIn(3, "discoverDevices")
+    runEvery1Minute("checkOffline")
+}
+
+/* --------------------------------------------------
+   DISCOVERY
+-------------------------------------------------- */
+def discoverDevices() {
+    def payload = [
+        msgType: "GetDeviceList",
+        msgID : now().toString()
+    ]
+    sendUdp(payload)
+}
+
+/* --------------------------------------------------
+   CHILD MANAGEMENT
+-------------------------------------------------- */
+def createChild(mac) {
+    if (getChildDevice(mac)) return
+    addChildDevice(
+        "connector",
+        "Connector Screen Child",
+        mac,
+        [
+            label: "Screen ${mac[-4..-1]}",
+            isComponent: false
+        ]
+    )
+    log.info "Created child ${mac}"
+}
+
+/* --------------------------------------------------
+   CHILD COMMANDS
+-------------------------------------------------- */
+def sendChildCommand(String mac, Integer position) {
+    queueCommand("doSendChildCommand", [mac: mac, position: position])
+}
+
+def sendChildStop(String mac) {
+    queueCommand("doSendChildStop", [mac: mac])
+}
+
+def refreshChild(String mac) {
+    queueCommand("doRefreshChild", [mac: mac])
+}
+
+/* --------------------------------------------------
+   TOKEN & QUEUE MANAGEMENT
+-------------------------------------------------- */
+def queueCommand(String commandName, Map args) {
+    logDebug "Queueing command: ${commandName} with args: ${args}"
+    state.commandQueue.add([command: commandName, arguments: args])
+    discoverDevices()
+}
+
+def processCommandQueue() {
+    if (state.commandQueue == null || state.commandQueue.size() == 0) {
+        logDebug "Command queue is empty."
+        return
+    }
+
+    logDebug "Processing ${state.commandQueue.size()} command(s) from queue."
+    state.commandQueue.each { cmdInfo ->
+        logDebug "Executing from queue: ${cmdInfo.command}"
+        this."${cmdInfo.command}"(cmdInfo.arguments)
+    }
+    state.commandQueue = []
+}
+
+/* --------------------------------------------------
+   INTERNAL COMMAND IMPLEMENTATIONS
+-------------------------------------------------- */
+def doSendChildCommand(Map args) {
+    def commandData = [
+        targetPosition: args.position as Integer
+    ]
+    
+    String accessToken = calculateAccessToken()
+    if (!accessToken) {
+        log.error "Cannot send command, failed to calculate AccessToken."
+        return
+    }
+
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: "10000000",
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
+}
+
+def doSendChildStop(Map args) {
+    def commandData = [
+        operation: 2
+    ]
+    String accessToken = calculateAccessToken()
+    if (!accessToken) {
+        log.error "Cannot send command, failed to calculate AccessToken."
+        return
+    }
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: "10000000",
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
+}
+
+def doRefreshChild(Map args) {
+    sendUdp([
+        msgType: "ReadDevice",
+        mac: args.mac,
+        deviceType: "10000000",
+        msgID: now().toString(),
+        AccessToken: state.token
+    ])
+}
+
+/* --------------------------------------------------
+   ACCESS TOKEN CALCULATION (Corrected based on user discovery)
+-------------------------------------------------- */
+def calculateAccessToken() {
+    if (!state.token) {
+        log.warn "Cannot calculate AccessToken, bridge session token is missing."
+        return null
+    }
+    if (!bridgeKey) {
+        log.warn "Cannot calculate AccessToken, Bridge Key is missing from preferences."
+        return null
+    }
+
+    logDebug "Calculating AccessToken with token: ${state.token} and literal key: ${bridgeKey}"
+    
+    try {
+        byte[] keyBytes = bridgeKey.getBytes("UTF-8")
+        
+        if (keyBytes.length != 16) {
+            log.error "Bridge Key in preferences MUST be exactly 16 characters long (including hyphens). Current length is ${keyBytes.length}."
+            return null
+        }
+        
+        def keySpec = new SecretKeySpec(keyBytes, "AES")
+        
+        // The text to be encrypted is the bridge's session token.
+        byte[] tokenBytes = state.token.getBytes("UTF-8")
+
+        def cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec)
+        
+        byte[] encryptedResult = cipher.doFinal(tokenBytes)
+        
+        String fullAccessToken = HexUtils.byteArrayToHexString(encryptedResult).toUpperCase()
+        
+        // --- THIS IS THE FINAL FIX ---
+        // Per user's discovery, the API incorrectly truncates the result to 32 characters.
+        String finalAccessToken = fullAccessToken.take(32)
+        // --- END OF FINAL FIX ---
+
+        log.info "Full calculated AccessToken: ${fullAccessToken}"
+        log.warn "Truncated AccessToken being sent: ${finalAccessToken}"
+        return finalAccessToken
+
+    } catch (e) {
+        log.error "FATAL: AccessToken calculation failed. Error: ${e.message}"
+        return null
+    }
+}
+/* --------------------------------------------------
+   UDP SEND
+-------------------------------------------------- */
+def sendUdp(Map message) {
+    String json = JsonOutput.toJson(message)
+    logDebug "UDP -> ${json}"
+    def action = new hubitat.device.HubAction(
+        HexUtils.byteArrayToHexString(json.getBytes("UTF-8")),
+        hubitat.device.Protocol.LAN,
+        [
+            type: hubitat.device.HubAction.Type.LAN_TYPE_UDPCLIENT,
+            destinationAddress: "${bridgeIp}:32100",
+            encoding: hubitat.device.HubAction.Encoding.HEX_STRING
+        ]
+    )
+    sendHubCommand(action)
+}
+
+/* --------------------------------------------------
+   PARSE
+-------------------------------------------------- */
+def parse(String description) {
+    def msg = parseLanMessage(description)
+    if (!msg?.payload) return
+    String jsonString = new String(
+        HexUtils.hexStringToByteArray(msg.payload),
+        "UTF-8"
+    )
+    logDebug "UDP Received: ${jsonString}"
+    def json = new JsonSlurper().parseText(jsonString)
+
+    if (json.msgType == "GetDeviceListAck") {
+        state.token = json.token
+        log.info "Session token acquired/refreshed: ${state.token}"
+        processCommandQueue()
+        
+        json.data.each {
+            if (it.deviceType == "10000000") {
+                createChild(it.mac)
+            }
+        }
+    }
+
+    if (json.msgType == "WriteDeviceAck") {
+        if (json.actionResult == "AccessToken error") {
+            log.warn "AccessToken error received. Check that the Bridge Key in preferences is correct."
+        } else {
+            log.info "Received WriteDeviceAck: ${json}"
+        }
+    }
+
+    if (json.msgType == "ReadDeviceAck") {
+        def child = getChildDevice(json.mac)
+        if (!child) return
+        
+        def reportData = json.data
+        log.info "Status Report for ${json.mac}: ${reportData}"
+        
+        def pos = reportData?.currentPosition as Integer
+        child.sendEvent(name: "level", value: pos)
+        child.sendEvent(name: "windowShade",
+                value: pos == 0 ? "open" :
+                       pos == 100 ? "closed" :
+                       "partially open")
+        child.sendEvent(name: "lastSeen", value: new Date().toString())
+    }
+    
+    if (json.msgType == "Report") {
+        log.info "Received unsolicited status report for ${json.mac}"
+    }
+}
+
+/* --------------------------------------------------
+   OFFLINE DETECTION
+-------------------------------------------------- */
+def checkOffline() {
+    getChildDevices().each { child ->
+        def last = child.currentValue("lastSeen")
+        if (!last) return
+        def diff = (now() - Date.parse("EEE MMM dd HH:mm:ss z yyyy", last).time) / 1000
+        if (diff > 120) {
+            child.sendEvent(name: "windowShade", value: "unknown")
+        }
+    }
+}
+
+/* -------------------------------------------------- */
+def refresh() {
+    getChildDevices().each {
+        refreshChild(it.deviceNetworkId)
+    }
+}
+
+def logDebug(msg) {
+    if (debugLogging) log.debug "[Connector] ${msg}"
+}
