@@ -40,7 +40,7 @@ You will need two pieces of information from your setup before installing the dr
     -   Open the "Connector" app on your mobile device.
     -   Navigate to the **"About"** page within the app.
     -   Quickly tap on the "About" page title or version number **5 times**.
-    -   A "Reminder" popup will appear showing your unique **KEY**. It will be a 16-character string that includes hyphens (e.g., `79851734-00bc-44`).
+    -   A "Reminder" popup will appear showing your unique **KEY**. It will be a 16-character string that includes hyphens (e.g., `74ae544c-d16e-4c`).
     -   **Copy this key exactly as it appears**, including hyphens and respecting the case (it is likely all lowercase).
 
 ### Step 2: Install the Parent Driver Code
@@ -48,8 +48,10 @@ You will need two pieces of information from your setup before installing the dr
 1.  In your web browser, navigate to your Hubitat hub's IP address.
 2.  Click on **Drivers Code** in the left-hand menu.
 3.  Click the **+ New Driver** button in the top-right corner.
-4.  An editor window will appear. Copy the entire Groovy driver code from the `Connector-WLAN-Parent-Driver.groovy` file and paste it into this window, replacing any text that is already there.
+4.  An editor window will appear. Copy the entire Groovy driver code from the `Parent Driver` file and paste it into this window, replacing any text that is already there.
 5.  Click the **Save** button in the top-right corner. The driver is now installed on your hub.
+6.  Click the **+ New Driver** button in the top-right corner.
+4.  An editor window will appear. Copy the entire Groovy driver code from the `Child Driver` file and paste it into this window, replacing any text that is already there.
 
 ### Step 3: Add the Virtual Device
 
