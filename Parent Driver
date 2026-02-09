@@ -155,7 +155,7 @@ def doRefreshChild(Map args) {
 }
 
 /* --------------------------------------------------
-   ACCESS TOKEN CALCULATION (Corrected based on user discovery)
+   ACCESS TOKEN CALCULATION
 -------------------------------------------------- */
 def calculateAccessToken() {
     if (!state.token) {
@@ -167,7 +167,14 @@ def calculateAccessToken() {
         return null
     }
 
-    logDebug "Calculating AccessToken with token: ${state.token} and literal key: ${bridgeKey}"
+    // Use a local variable for the toggle to avoid repeated lookups
+    boolean isDebug = debugLogging
+    
+    if (isDebug) {
+        logDebug "Calculating AccessToken with token: ${state.token} and literal key: ${bridgeKey}"
+    } else {
+        logDebug "Calculating AccessToken..."
+    }
     
     try {
         byte[] keyBytes = bridgeKey.getBytes("UTF-8")
@@ -178,24 +185,20 @@ def calculateAccessToken() {
         }
         
         def keySpec = new SecretKeySpec(keyBytes, "AES")
-        
-        // The text to be encrypted is the bridge's session token.
         byte[] tokenBytes = state.token.getBytes("UTF-8")
-
         def cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, keySpec)
-        
         byte[] encryptedResult = cipher.doFinal(tokenBytes)
-        
         String fullAccessToken = HexUtils.byteArrayToHexString(encryptedResult).toUpperCase()
-        
-        // --- THIS IS THE FINAL FIX ---
-        // Per user's discovery, the API incorrectly truncates the result to 32 characters.
         String finalAccessToken = fullAccessToken.take(32)
-        // --- END OF FINAL FIX ---
-
-        log.info "Full calculated AccessToken: ${fullAccessToken}"
-        log.warn "Truncated AccessToken being sent: ${finalAccessToken}"
+        
+        if (isDebug) {
+            log.info "Full calculated AccessToken: ${fullAccessToken}"
+            log.warn "Truncated AccessToken being sent: ${finalAccessToken}"
+        } else {
+            log.info "AccessToken calculated successfully."
+        }
+        
         return finalAccessToken
 
     } catch (e) {
@@ -203,12 +206,24 @@ def calculateAccessToken() {
         return null
     }
 }
+
 /* --------------------------------------------------
    UDP SEND
 -------------------------------------------------- */
 def sendUdp(Map message) {
     String json = JsonOutput.toJson(message)
-    logDebug "UDP -> ${json}"
+    
+    // If debug is off, create a sanitized version of the log message
+    if (!debugLogging) {
+        Map sanitizedMessage = new HashMap(message)
+        if (sanitizedMessage.containsKey("AccessToken")) {
+            sanitizedMessage.AccessToken = "[REDACTED]"
+        }
+        logDebug "UDP -> ${JsonOutput.toJson(sanitizedMessage)}"
+    } else {
+        logDebug "UDP -> ${json}"
+    }
+    
     def action = new hubitat.device.HubAction(
         HexUtils.byteArrayToHexString(json.getBytes("UTF-8")),
         hubitat.device.Protocol.LAN,
@@ -220,7 +235,6 @@ def sendUdp(Map message) {
     )
     sendHubCommand(action)
 }
-
 /* --------------------------------------------------
    PARSE
 -------------------------------------------------- */
@@ -231,12 +245,24 @@ def parse(String description) {
         HexUtils.hexStringToByteArray(msg.payload),
         "UTF-8"
     )
-    logDebug "UDP Received: ${jsonString}"
+    
+    // If debug is off, create a sanitized version of the log message
+    if (!debugLogging) {
+        def json = new JsonSlurper().parseText(jsonString)
+        Map sanitizedJson = new HashMap(json)
+        if (sanitizedJson.containsKey("token")) {
+            sanitizedJson.token = "[REDACTED]"
+        }
+        logDebug "UDP Received: ${JsonOutput.toJson(sanitizedJson)}"
+    } else {
+        logDebug "UDP Received: ${jsonString}"
+    }
+
     def json = new JsonSlurper().parseText(jsonString)
 
     if (json.msgType == "GetDeviceListAck") {
         state.token = json.token
-        log.info "Session token acquired/refreshed: ${state.token}"
+        log.info "Session token acquired/refreshed." // Removed token from this log
         processCommandQueue()
         
         json.data.each {
@@ -246,11 +272,19 @@ def parse(String description) {
         }
     }
 
+    if (json.msgType == "Heartbeat") {
+        log.info "Heartbeat received."
+        if (state.token != json.token) {
+            log.warn "Heartbeat token is different. Updating session token."
+            state.token = json.token
+        }
+    }
+
     if (json.msgType == "WriteDeviceAck") {
         if (json.actionResult == "AccessToken error") {
             log.warn "AccessToken error received. Check that the Bridge Key in preferences is correct."
         } else {
-            log.info "Received WriteDeviceAck: ${json}"
+            log.info "SUCCESS! Received WriteDeviceAck."
         }
     }
 
@@ -274,7 +308,6 @@ def parse(String description) {
         log.info "Received unsolicited status report for ${json.mac}"
     }
 }
-
 /* --------------------------------------------------
    OFFLINE DETECTION
 -------------------------------------------------- */
@@ -283,8 +316,12 @@ def checkOffline() {
         def last = child.currentValue("lastSeen")
         if (!last) return
         def diff = (now() - Date.parse("EEE MMM dd HH:mm:ss z yyyy", last).time) / 1000
-        if (diff > 120) {
-            child.sendEvent(name: "windowShade", value: "unknown")
+        
+        // If it's been over 2 minutes AND the device isn't already marked as unknown...
+        if (diff > 120 && child.currentValue("windowShade") != "unknown") {
+            // MODIFICATION: Instead of changing the state, just log a warning.
+            // This preserves the last known position for the user.
+            log.warn "Device ${child.deviceNetworkId} has not been seen for over 2 minutes. It may be offline."
         }
     }
 }
