@@ -1,0 +1,57 @@
+/**
+
+ * Connector Screen Child
+
+ */
+
+metadata {
+
+    definition(name: "Connector Screen Child", namespace: "connector", author: "Scubamikejax904 & Manus") {
+
+        capability "WindowShade"
+
+        capability "SwitchLevel"
+
+        capability "Refresh"
+
+        attribute "movement", "string"
+
+        attribute "lastSeen", "string"
+
+    }
+
+}
+
+def open() {
+    log.debug "Child open()"
+    parent.sendChildCommand(device.deviceNetworkId, 0)
+
+}
+
+def close() {
+    log.debug "Child close()"
+    parent.sendChildCommand(device.deviceNetworkId, 100)
+
+}
+
+def stop() {
+    log.debug "Child stop()"
+    parent.sendChildStop(device.deviceNetworkId)
+}
+
+def setPosition(value) {
+    Integer pos = value as Integer
+    log.debug "Child setPosition(${pos})"
+    parent.sendChildCommand(device.deviceNetworkId, pos)
+}
+
+def setLevel(value) {
+    Integer pos = value as Integer
+    log.debug "Child setLevel(${pos})"
+    parent.sendChildCommand(device.deviceNetworkId, pos)
+}
+def refresh() {
+
+    parent.refreshChild(device.deviceNetworkId)
+
+}
