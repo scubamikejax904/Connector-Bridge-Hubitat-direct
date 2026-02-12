@@ -6,7 +6,7 @@
 
 metadata {
 
-    definition(name: "Connector Screen Child", namespace: "connector", author: "MichaelSGartner w/ Manus") {
+    definition(name: "Connector Screen Child", namespace: "connector", author: "ScubaMikeJax904 & Manus") {
 
         capability "WindowShade"
 
