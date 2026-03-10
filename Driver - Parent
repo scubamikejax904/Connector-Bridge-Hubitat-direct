@@ -13,7 +13,7 @@ metadata {
         name: "Connector WLAN Integration (Full)", 
         namespace: "connector",
         author: "Scubamikejax904 & Manus",
-        importUrl:   'https://raw.githubusercontent.com/wir3z/hubitat/main/owntracks-hubitat/OwnTracks%20Driver.groovy')
+        importUrl:   'https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent')
     
     {
         capability "Initialize"
