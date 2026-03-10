@@ -17,7 +17,7 @@ metadata {
     preferences {
         input name: "bridgeIp", type: "text", title: "Bridge IP", required: true
         input name: "bridgeKey", type: "text", title: "Bridge Key (16-char string from app, with hyphens)", required: true
-        input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006A/P-Box", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
+        input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006 P-Box", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
         input name: "offlineTimeout", type: "number", title: "Offline Detection Timeout (minutes, 0=disabled)", defaultValue: 2, required: true
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
     }
