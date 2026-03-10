@@ -1,6 +1,6 @@
 /**
  * Connector WLAN Integration - Full Production
- * DD7006 Compatible - Final Corrected Version
+ * DD7006 & DD7002B Compatible ?
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -9,7 +9,7 @@ import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec // THIS LINE WAS MISSING
 
 metadata {
-    definition(name: "Connector WLAN Integration (Full)", namespace: "connector", author: "ScubaMikeJax904 & Manus") {
+    definition(name: "Connector WLAN Integration (Full)", namespace: "connector", author: "Scubamikejax904 & Manus") {
         capability "Initialize"
         capability "Refresh"
         command "discoverDevices"
@@ -17,6 +17,8 @@ metadata {
     preferences {
         input name: "bridgeIp", type: "text", title: "Bridge IP", required: true
         input name: "bridgeKey", type: "text", title: "Bridge Key (16-char string from app, with hyphens)", required: true
+        input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006A/P-Box", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
+        input name: "offlineTimeout", type: "number", title: "Offline Detection Timeout (minutes, 0=disabled)", defaultValue: 2, required: true
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
     }
 }
@@ -26,15 +28,23 @@ def installed() { initialize() }
 def updated() { unschedule(); initialize() }
 
 def initialize() {
-    logDebug "Initializing..."
+    logDebug "Initializing Connector WLAN Integration..."
     state.token = null
     state.commandQueue = []
+    state.detectedHubType = null
     runIn(3, "discoverDevices")
-    runEvery1Minute("checkOffline")
+    
+    // Only schedule offline check if timeout > 0
+    if (offlineTimeout != null && offlineTimeout > 0) {
+        runEvery1Minute("checkOffline")
+        logDebug "Offline detection enabled with ${offlineTimeout} minute timeout."
+    } else {
+        logDebug "Offline detection disabled."
+    }
 }
 
 /* --------------------------------------------------
-   DISCOVERY
+   DISCOVERY - Works for both DD7002B and DD7006A
 -------------------------------------------------- */
 def discoverDevices() {
     def payload = [
@@ -44,6 +54,29 @@ def discoverDevices() {
     sendUdp(payload)
 }
 
+/* --------------------------------------------------
+   HUB TYPE DETECTION
+-------------------------------------------------- */
+def detectHubType(Map json) {
+    // Auto-detect based on response characteristics
+    if (hubType != "Auto-Detect") {
+        state.detectedHubType = hubType
+        log.info "Hub type set from preferences: ${hubType}"
+        return
+    }
+    
+    // Both hubs use same protocol, detection is for logging purposes
+    // Protocol version can indicate hub generation
+    def protocol = json.ProtocolVersion ?: "unknown"
+    
+    if (protocol.startsWith("0.")) {
+        state.detectedHubType = "DD7002B or DD7006A"
+    } else {
+        state.detectedHubType = "DD7006A (newer protocol)"
+    }
+    
+    log.info "Auto-detected hub type: ${state.detectedHubType} (Protocol: ${protocol})"
+}
 /* --------------------------------------------------
    CHILD MANAGEMENT
 -------------------------------------------------- */
@@ -156,6 +189,7 @@ def doRefreshChild(Map args) {
 
 /* --------------------------------------------------
    ACCESS TOKEN CALCULATION
+   Same algorithm works for both DD7002B and DD7006A
 -------------------------------------------------- */
 def calculateAccessToken() {
     if (!state.token) {
@@ -167,7 +201,6 @@ def calculateAccessToken() {
         return null
     }
 
-    // Use a local variable for the toggle to avoid repeated lookups
     boolean isDebug = debugLogging
     
     if (isDebug) {
@@ -311,7 +344,7 @@ def parse(String description) {
 /* --------------------------------------------------
    OFFLINE DETECTION
 -------------------------------------------------- */
-def checkOffline() {
+/*def checkOffline() {
     getChildDevices().each { child ->
         def last = child.currentValue("lastSeen")
         if (!last) return
@@ -322,6 +355,25 @@ def checkOffline() {
             // MODIFICATION: Instead of changing the state, just log a warning.
             // This preserves the last known position for the user.
             log.warn "Device ${child.deviceNetworkId} has not been seen for over 2 minutes. It may be offline."
+        }
+    }
+}*/
+
+def checkOffline() {
+    // Skip if offline detection is disabled (timeout = 0 or null)
+    if (offlineTimeout == null || offlineTimeout == 0) {
+        return
+    }
+    
+    def timeoutSeconds = offlineTimeout * 60
+    
+    getChildDevices().each { child ->
+        def last = child.currentValue("lastSeen")
+        if (!last) return
+        def diff = (now() - Date.parse("EEE MMM dd HH:mm:ss z yyyy", last).time) / 1000
+        
+        if (diff > timeoutSeconds && child.currentValue("windowShade") != "unknown") {
+            log.warn "Device ${child.deviceNetworkId} has not been seen for over ${offlineTimeout} minute(s). It may be offline."
         }
     }
 }
