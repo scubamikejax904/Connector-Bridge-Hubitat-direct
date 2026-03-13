@@ -1,6 +1,8 @@
 /**
  * Connector WLAN Integration - Full Production
  * DD7006 & DD7002B Compatible ?
+ * Thank you Jcongdon01 for working with and Testing the DD7002B Hub
+ *Trial Parent Driver v5 
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -9,13 +11,7 @@ import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec // THIS LINE WAS MISSING
 
 metadata {
-    definition(
-        name: "Connector WLAN Integration (Full)", 
-        namespace: "connector",
-        author: "Scubamikejax904 & Manus",
-        importUrl:   'https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent')
-    
-    {
+    definition(name: "Connector WLAN Integration (Full)", namespace: "connector", author: "Scubamikejax904 & Manus") {
         capability "Initialize"
         capability "Refresh"
         command "discoverDevices"
@@ -23,7 +19,7 @@ metadata {
     preferences {
         input name: "bridgeIp", type: "text", title: "Bridge IP", required: true
         input name: "bridgeKey", type: "text", title: "Bridge Key (16-char string from app, with hyphens)", required: true
-        input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006 P-Box", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
+        input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
         input name: "offlineTimeout", type: "number", title: "Offline Detection Timeout (minutes, 0=disabled)", defaultValue: 2, required: true
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
     }
@@ -119,23 +115,36 @@ def refreshChild(String mac) {
    TOKEN & QUEUE MANAGEMENT
 -------------------------------------------------- */
 def queueCommand(String commandName, Map args) {
-    logDebug "Queueing command: ${commandName} with args: ${args}"
-    state.commandQueue.add([command: commandName, arguments: args])
-    discoverDevices()
-}
 
+    logDebug "Queueing command: ${commandName} with args: ${args}"
+
+    def queue = state.commandQueue ?: []
+    queue << [command: commandName, arguments: args]
+    state.commandQueue = queue
+
+    if (!state.token) {
+        discoverDevices()
+    } else {
+        processCommandQueue()
+    }
+}
 def processCommandQueue() {
-    if (state.commandQueue == null || state.commandQueue.size() == 0) {
+
+    def queue = state.commandQueue ?: []
+
+    if (queue.size() == 0) {
         logDebug "Command queue is empty."
         return
     }
 
-    logDebug "Processing ${state.commandQueue.size()} command(s) from queue."
-    state.commandQueue.each { cmdInfo ->
+    logDebug "Processing ${queue.size()} command(s) from queue."
+
+    state.commandQueue = []
+
+    queue.each { cmdInfo ->
         logDebug "Executing from queue: ${cmdInfo.command}"
         this."${cmdInfo.command}"(cmdInfo.arguments)
     }
-    state.commandQueue = []
 }
 
 /* --------------------------------------------------
@@ -146,7 +155,7 @@ def doSendChildCommand(Map args) {
         targetPosition: args.position as Integer
     ]
     
-    String accessToken = calculateAccessToken()
+    String accessToken = generateAccessToken(state.token)
     if (!accessToken) {
         log.error "Cannot send command, failed to calculate AccessToken."
         return
@@ -167,7 +176,7 @@ def doSendChildStop(Map args) {
     def commandData = [
         operation: 2
     ]
-    String accessToken = calculateAccessToken()
+    String accessToken = generateAccessToken(state.token)
     if (!accessToken) {
         log.error "Cannot send command, failed to calculate AccessToken."
         return
@@ -189,7 +198,7 @@ def doRefreshChild(Map args) {
         mac: args.mac,
         deviceType: "10000000",
         msgID: now().toString(),
-        AccessToken: state.token
+        AccessToken: generateAccessToken(state.token)
     ])
 }
 
@@ -197,55 +206,47 @@ def doRefreshChild(Map args) {
    ACCESS TOKEN CALCULATION
    Same algorithm works for both DD7002B and DD7006A
 -------------------------------------------------- */
-def calculateAccessToken() {
-    if (!state.token) {
-        log.warn "Cannot calculate AccessToken, bridge session token is missing."
-        return null
-    }
-    if (!bridgeKey) {
-        log.warn "Cannot calculate AccessToken, Bridge Key is missing from preferences."
-        return null
-    }
+def generateAccessToken(token) {
+    if (!bridgeKey || !token) return null
 
-    boolean isDebug = debugLogging
-    
-    if (isDebug) {
-        logDebug "Calculating AccessToken with token: ${state.token} and literal key: ${bridgeKey}"
-    } else {
-        logDebug "Calculating AccessToken..."
-    }
-    
     try {
-        byte[] keyBytes = bridgeKey.getBytes("UTF-8")
-        
-        if (keyBytes.length != 16) {
-            log.error "Bridge Key in preferences MUST be exactly 16 characters long (including hyphens). Current length is ${keyBytes.length}."
-            return null
-        }
-        
-        def keySpec = new SecretKeySpec(keyBytes, "AES")
-        byte[] tokenBytes = state.token.getBytes("UTF-8")
-        def cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
-        cipher.init(Cipher.ENCRYPT_MODE, keySpec)
-        byte[] encryptedResult = cipher.doFinal(tokenBytes)
-        String fullAccessToken = HexUtils.byteArrayToHexString(encryptedResult).toUpperCase()
-        String finalAccessToken = fullAccessToken.take(32)
-        
-        if (isDebug) {
-            log.info "Full calculated AccessToken: ${fullAccessToken}"
-            log.warn "Truncated AccessToken being sent: ${finalAccessToken}"
-        } else {
-            log.info "AccessToken calculated successfully."
-        }
-        
-        return finalAccessToken
 
-    } catch (e) {
-        log.error "FATAL: AccessToken calculation failed. Error: ${e.message}"
+        SecretKeySpec skeySpec = new SecretKeySpec(bridgeKey.getBytes("UTF-8"), "AES")
+        Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, skeySpec)
+
+        byte[] tokenBytes = token.getBytes("UTF-8")
+
+        boolean fullMode = (hubType == "DD7002B" || state.detectedHubType?.contains("7002B"))
+
+        int blockSize = fullMode ? 32 : 16
+
+		byte[] paddedToken = new byte[blockSize]
+
+		// copy token and ensure remaining bytes are zero
+		for (int i = 0; i < blockSize; i++) {
+		    if (i < tokenBytes.length) {
+		        paddedToken[i] = tokenBytes[i]
+		    } else {
+		        paddedToken[i] = 0
+		    }
+		}
+		byte[] encrypted = cipher.doFinal(paddedToken)
+
+		String hex = HexUtils.byteArrayToHexString(encrypted).toUpperCase()
+        if (!fullMode) {
+            hex = hex.substring(0,32)
+        }
+
+        logDebug "Generated AccessToken (${fullMode ? "FULL" : "TRUNCATED"}): ${hex}"
+        return hex
+
+    } catch (Exception e) {
+        log.error "Encryption Error: ${e.message}"
         return null
     }
+    logDebug "HubType: ${hubType}  Detected: ${state.detectedHubType}  TokenLen: ${hex.length()}"
 }
-
 /* --------------------------------------------------
    UDP SEND
 -------------------------------------------------- */
@@ -280,18 +281,12 @@ def sendUdp(Map message) {
 def parse(String description) {
     def msg = parseLanMessage(description)
     if (!msg?.payload) return
-    String jsonString = new String(
-        HexUtils.hexStringToByteArray(msg.payload),
-        "UTF-8"
-    )
-    
-    // If debug is off, create a sanitized version of the log message
+    String jsonString = new String(HexUtils.hexStringToByteArray(msg.payload), "UTF-8")
+
     if (!debugLogging) {
         def json = new JsonSlurper().parseText(jsonString)
         Map sanitizedJson = new HashMap(json)
-        if (sanitizedJson.containsKey("token")) {
-            sanitizedJson.token = "[REDACTED]"
-        }
+        if (sanitizedJson.containsKey("token")) sanitizedJson.token = "[REDACTED]"
         logDebug "UDP Received: ${JsonOutput.toJson(sanitizedJson)}"
     } else {
         logDebug "UDP Received: ${jsonString}"
@@ -301,9 +296,9 @@ def parse(String description) {
 
     if (json.msgType == "GetDeviceListAck") {
         state.token = json.token
-        log.info "Session token acquired/refreshed." // Removed token from this log
+        log.info "Session token acquired/refreshed."
         processCommandQueue()
-        
+
         json.data.each {
             if (it.deviceType == "10000000") {
                 createChild(it.mac)
@@ -321,50 +316,26 @@ def parse(String description) {
 
     if (json.msgType == "WriteDeviceAck") {
         if (json.actionResult == "AccessToken error") {
-            log.warn "AccessToken error received. Check that the Bridge Key in preferences is correct."
+            log.warn "AccessToken error — refreshing token"
+            state.token = null
+            discoverDevices()
         } else {
             log.info "SUCCESS! Received WriteDeviceAck."
         }
     }
 
-    if (json.msgType == "ReadDeviceAck") {
+    // Combine ReadDeviceAck and Report processing
+    if (json.msgType in ["ReadDeviceAck", "Report"]) {
         def child = getChildDevice(json.mac)
         if (!child) return
-        
-        def reportData = json.data
-        log.info "Status Report for ${json.mac}: ${reportData}"
-        
-        def pos = reportData?.currentPosition as Integer
-        child.sendEvent(name: "level", value: pos)
-        child.sendEvent(name: "windowShade",
-                value: pos == 0 ? "open" :
-                       pos == 100 ? "closed" :
-                       "partially open")
-        child.sendEvent(name: "lastSeen", value: new Date().toString())
-    }
-    
-    if (json.msgType == "Report") {
-        log.info "Received unsolicited status report for ${json.mac}"
+
+        def pos = json.data?.currentPosition as Integer
+        updateChildEvents(child, pos)
     }
 }
 /* --------------------------------------------------
    OFFLINE DETECTION
 -------------------------------------------------- */
-/*def checkOffline() {
-    getChildDevices().each { child ->
-        def last = child.currentValue("lastSeen")
-        if (!last) return
-        def diff = (now() - Date.parse("EEE MMM dd HH:mm:ss z yyyy", last).time) / 1000
-        
-        // If it's been over 2 minutes AND the device isn't already marked as unknown...
-        if (diff > 120 && child.currentValue("windowShade") != "unknown") {
-            // MODIFICATION: Instead of changing the state, just log a warning.
-            // This preserves the last known position for the user.
-            log.warn "Device ${child.deviceNetworkId} has not been seen for over 2 minutes. It may be offline."
-        }
-    }
-}*/
-
 def checkOffline() {
     // Skip if offline detection is disabled (timeout = 0 or null)
     if (offlineTimeout == null || offlineTimeout == 0) {
@@ -385,6 +356,27 @@ def checkOffline() {
 }
 
 /* -------------------------------------------------- */
+def updateChildEvents(child, pos) {
+    def currentLevel = child.currentValue("level")
+    def currentShade = child.currentValue("windowShade")
+
+    // Update level only if changed
+    if (currentLevel != pos) {
+        child.sendEvent(name: "level", value: pos)
+    }
+
+    // Determine windowShade
+    def shadeValue = (pos == 0) ? "open" : (pos == 100) ? "closed" : "partially open"
+
+    // Update windowShade only if changed
+    if (currentShade != shadeValue) {
+        child.sendEvent(name: "windowShade", value: shadeValue)
+    }
+
+    // Always update lastSeen (optional: throttle if needed)
+    child.sendEvent(name: "lastSeen", value: new Date().toString())
+}
+
 def refresh() {
     getChildDevices().each {
         refreshChild(it.deviceNetworkId)
