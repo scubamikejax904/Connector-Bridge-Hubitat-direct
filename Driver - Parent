@@ -11,7 +11,11 @@ import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec // THIS LINE WAS MISSING
 
 metadata {
-    definition(name: "Connector WLAN Integration (Full)", namespace: "connector", author: "Scubamikejax904 & Manus") {
+    definition(name: "Connector WLAN Integration (Full)", 
+               namespace: "connector", 
+               author: "Scubamikejax904 & Manus",
+               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent")
+    {
         capability "Initialize"
         capability "Refresh"
         command "discoverDevices"
