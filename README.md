@@ -68,6 +68,7 @@ You will now be on the device page for the bridge you just created.
 1.  In the "Preferences" section, enter the following:
     -   **Bridge IP:** The static IP address of your Connector bridge that you found in Step 1.
     -   **Bridge Key:** The 16-character key (with hyphens) that you got from the app in Step 1.
+    -   **Select Bridge Type** Select either DD7002B or DD7006 (Auto-Detect trys to figure out hub type but if unsecsesful defaults to DD7006)
 2.  Click the **Save Preferences** button.
 
 ### Step 5: Initialize and Discover Devices
