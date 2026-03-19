@@ -34,7 +34,7 @@ You will need two pieces of information from your setup before installing the dr
 
 1.  **Bridge IP Address:**
     -   Find the IP address of your Connector Wi-Fi bridge. You can usually find this in your router's DHCP client list or by using a network scanning app.
-    -   It is **highly recommended** to assign a **static IP address** (or DHCP reservation) to your bridge in your router's settings. This will prevent the IP from changing in the future, which would break the integration.
+    -   It is **highly recommended** to assign a **static IP address** (DHCP reservation in your router) to your bridge in your router's settings. This will prevent the IP from changing in the future, which would break this integration.
 
 2.  **Bridge Key:**
     -   Open the "Connector" app on your mobile device.
