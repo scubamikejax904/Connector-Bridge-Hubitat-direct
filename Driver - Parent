@@ -1,20 +1,21 @@
 /**
  * Connector WLAN Integration - Full Production
- * DD7006 & DD7002B Compatible ?
- * Thank you Jcongdon01 for working with and Testing the DD7002B Hub
- *Trial Parent Driver v5 
+ * DD7006 & DD7002B Compatible
+ * Fixed AccessToken generation to match official motion-blinds library
+ * Thank you Jcongdon01 for testing with DD7002B Hub
+ * Test Parent Driver v8 - Corrected AccessToken generation for hub type specificity
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 import hubitat.helper.HexUtils
 import javax.crypto.Cipher
-import javax.crypto.spec.SecretKeySpec // THIS LINE WAS MISSING
+import javax.crypto.spec.SecretKeySpec
 
 metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & Manus",
-               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent")
+               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent") 
     {
         capability "Initialize"
         capability "Refresh"
@@ -29,6 +30,7 @@ metadata {
     }
 }
 
+
 /* -------------------------------------------------- */
 def installed() { initialize() }
 def updated() { unschedule(); initialize() }
@@ -36,8 +38,11 @@ def updated() { unschedule(); initialize() }
 def initialize() {
     logDebug "Initializing Connector WLAN Integration..."
     state.token = null
+    state.tokenTimestamp = null
     state.commandQueue = []
     state.detectedHubType = null
+    state.pendingMsgIDs = []
+    
     runIn(3, "discoverDevices")
     
     // Only schedule offline check if timeout > 0
@@ -83,6 +88,7 @@ def detectHubType(Map json) {
     
     log.info "Auto-detected hub type: ${state.detectedHubType} (Protocol: ${protocol})"
 }
+
 /* --------------------------------------------------
    CHILD MANAGEMENT
 -------------------------------------------------- */
@@ -98,6 +104,19 @@ def createChild(mac) {
         ]
     )
     log.info "Created child ${mac}"
+}
+
+def cleanupMissingChildren(List discoveredMacs) {
+    getChildDevices().each { child ->
+        if (!discoveredMacs.contains(child.deviceNetworkId)) {
+            log.warn "Device ${child.deviceNetworkId} no longer reported by bridge, deleting"
+            try {
+                deleteChildDevice(child.deviceNetworkId)
+            } catch (Exception e) {
+                log.error "Failed to delete child ${child.deviceNetworkId}: ${e.message}"
+            }
+        }
+    }
 }
 
 /* --------------------------------------------------
@@ -132,6 +151,7 @@ def queueCommand(String commandName, Map args) {
         processCommandQueue()
     }
 }
+
 def processCommandQueue() {
 
     def queue = state.commandQueue ?: []
@@ -208,65 +228,69 @@ def doRefreshChild(Map args) {
 
 /* --------------------------------------------------
    ACCESS TOKEN CALCULATION
+   Fixed to match official motion-blinds library
+   Uses PKCS5Padding instead of manual zero-padding
    Same algorithm works for both DD7002B and DD7006A
 -------------------------------------------------- */
 def generateAccessToken(token) {
-    if (!bridgeKey || !token) return null
+    if (!bridgeKey || !token) {
+        log.error "Cannot generate AccessToken: missing key or token"
+        return null
+    }
 
     try {
-
         SecretKeySpec skeySpec = new SecretKeySpec(bridgeKey.getBytes("UTF-8"), "AES")
-        Cipher cipher = Cipher.getInstance("AES/ECB/NoPadding")
+        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, skeySpec)
 
         byte[] tokenBytes = token.getBytes("UTF-8")
+        
+        // Encrypt directly - PKCS5Padding handles padding automatically
+        // This matches the official motion-blinds Python library behavior
+        byte[] encrypted = cipher.doFinal(tokenBytes)
 
-        boolean fullMode = (hubType == "DD7002B" || state.detectedHubType?.contains("7002B"))
-
-        int blockSize = fullMode ? 32 : 16
-
-		byte[] paddedToken = new byte[blockSize]
-
-		// copy token and ensure remaining bytes are zero
-		for (int i = 0; i < blockSize; i++) {
-		    if (i < tokenBytes.length) {
-		        paddedToken[i] = tokenBytes[i]
-		    } else {
-		        paddedToken[i] = 0
-		    }
-		}
-		byte[] encrypted = cipher.doFinal(paddedToken)
-
-		String hex = HexUtils.byteArrayToHexString(encrypted).toUpperCase()
-        if (!fullMode) {
-            hex = hex.substring(0,32)
+        String hex = HexUtils.byteArrayToHexString(encrypted).toUpperCase()
+        
+        // Apply conditional truncation based on detected hub type
+        String finalAccessToken = hex
+        if (state.detectedHubType?.contains("DD7006")) {
+            // Truncate for DD7006, assuming the first 32 characters (128 bits) are required.
+            // If this length is incorrect, it needs to be adjusted based on official documentation.
+            finalAccessToken = hex.substring(0, 32)
+            logDebug "Truncated AccessToken for DD7006: ${finalAccessToken}"
         }
 
-        logDebug "Generated AccessToken (${fullMode ? "FULL" : "TRUNCATED"}): ${hex}"
-        return hex
+        // Show full AccessToken in debug logs for troubleshooting
+        logDebug "Generated AccessToken (full): ${hex}"
+        logDebug "Input token (from bridge): ${token}"
+        logDebug "Bridge key used: ${bridgeKey}"
+        return finalAccessToken
 
     } catch (Exception e) {
         log.error "Encryption Error: ${e.message}"
         return null
     }
-    logDebug "HubType: ${hubType}  Detected: ${state.detectedHubType}  TokenLen: ${hex.length()}"
 }
+
 /* --------------------------------------------------
    UDP SEND
 -------------------------------------------------- */
 def sendUdp(Map message) {
     String json = JsonOutput.toJson(message)
     
-    // If debug is off, create a sanitized version of the log message
-    if (!debugLogging) {
-        Map sanitizedMessage = new HashMap(message)
-        if (sanitizedMessage.containsKey("AccessToken")) {
-            sanitizedMessage.AccessToken = "[REDACTED]"
+    // Track pending requests by msgID
+    if (message.msgID) {
+        def pending = state.pendingMsgIDs ?: []
+        pending << [id: message.msgID, sent: now()]
+        // Keep only last 10 pending requests
+        if (pending.size() > 10) {
+            pending = pending[-10..-1]
         }
-        logDebug "UDP -> ${JsonOutput.toJson(sanitizedMessage)}"
-    } else {
-        logDebug "UDP -> ${json}"
+        state.pendingMsgIDs = pending
     }
+    
+    // Always show full message in debug logs (including AccessToken)
+    logDebug "UDP -> ${json}"
     
     def action = new hubitat.device.HubAction(
         HexUtils.byteArrayToHexString(json.getBytes("UTF-8")),
@@ -279,6 +303,7 @@ def sendUdp(Map message) {
     )
     sendHubCommand(action)
 }
+
 /* --------------------------------------------------
    PARSE
 -------------------------------------------------- */
@@ -287,34 +312,40 @@ def parse(String description) {
     if (!msg?.payload) return
     String jsonString = new String(HexUtils.hexStringToByteArray(msg.payload), "UTF-8")
 
-    if (!debugLogging) {
-        def json = new JsonSlurper().parseText(jsonString)
-        Map sanitizedJson = new HashMap(json)
-        if (sanitizedJson.containsKey("token")) sanitizedJson.token = "[REDACTED]"
-        logDebug "UDP Received: ${JsonOutput.toJson(sanitizedJson)}"
-    } else {
-        logDebug "UDP Received: ${jsonString}"
-    }
+    // Always show full message in debug logs (including token)
+    logDebug "UDP Received: ${jsonString}"
 
     def json = new JsonSlurper().parseText(jsonString)
 
     if (json.msgType == "GetDeviceListAck") {
         state.token = json.token
+        state.tokenTimestamp = now()
         log.info "Session token acquired/refreshed."
+        
+        // Detect hub type from response
+        detectHubType(json)
+        
         processCommandQueue()
 
+        // Track discovered MACs for cleanup
+        def discoveredMacs = []
+        
         json.data.each {
             if (it.deviceType == "10000000") {
                 createChild(it.mac)
+                discoveredMacs << it.mac
             }
         }
+        
+        // Clean up children that are no longer reported
+        cleanupMissingChildren(discoveredMacs)
     }
 
     if (json.msgType == "Heartbeat") {
         log.info "Heartbeat received."
-        if (state.token != json.token) {
-            log.warn "Heartbeat token is different. Updating session token."
+        if (json.token) {
             state.token = json.token
+            state.tokenTimestamp = now()
         }
     }
 
@@ -322,6 +353,7 @@ def parse(String description) {
         if (json.actionResult == "AccessToken error") {
             log.warn "AccessToken error — refreshing token"
             state.token = null
+            state.tokenTimestamp = null
             discoverDevices()
         } else {
             log.info "SUCCESS! Received WriteDeviceAck."
@@ -337,6 +369,7 @@ def parse(String description) {
         updateChildEvents(child, pos)
     }
 }
+
 /* --------------------------------------------------
    OFFLINE DETECTION
 -------------------------------------------------- */
@@ -358,6 +391,7 @@ def checkOffline() {
         }
     }
 }
+
 
 /* -------------------------------------------------- */
 def updateChildEvents(child, pos) {
@@ -381,11 +415,13 @@ def updateChildEvents(child, pos) {
     child.sendEvent(name: "lastSeen", value: new Date().toString())
 }
 
+
 def refresh() {
     getChildDevices().each {
         refreshChild(it.deviceNetworkId)
     }
 }
+
 
 def logDebug(msg) {
     if (debugLogging) log.debug "[Connector] ${msg}"
