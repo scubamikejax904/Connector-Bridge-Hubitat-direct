@@ -81,9 +81,9 @@ def detectHubType(Map json) {
     def protocol = json.ProtocolVersion ?: "unknown"
     
     if (protocol.startsWith("0.")) {
-        state.detectedHubType = "DD7002B or DD7006A"
+        state.detectedHubType = "DD7002B or DD7006"
     } else {
-        state.detectedHubType = "DD7006A (newer protocol)"
+        state.detectedHubType = "DD7006 (newer protocol)"
     }
     
     log.info "Auto-detected hub type: ${state.detectedHubType} (Protocol: ${protocol})"
