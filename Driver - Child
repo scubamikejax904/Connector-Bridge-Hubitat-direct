@@ -1,41 +1,64 @@
 /**
-
- * Connector Screen Child
-
+ * Connector Screen Child Driver
+ * Compatible with DD7006 & DD7002B
+ * Implements WindowShade and SwitchLevel capabilities
+ * Test Child Driver v8
  */
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 
 metadata {
-
-    definition(name: "Connector Screen Child", namespace: "connector", author: "ScubaMikeJax904 & Manus") {
-
+    definition(name: "Connector Screen Child", 
+               namespace: "connector", 
+               author: "Scubamikejax904 & Manus",
+               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Child") 
+    {
         capability "WindowShade"
-
         capability "SwitchLevel"
-
         capability "Refresh"
-
-        attribute "movement", "string"
-
+        
         attribute "lastSeen", "string"
-
     }
-
+    
+    preferences {
+        input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
+    }
 }
 
+/* -------------------------------------------------- */
+def installed() {
+    log.info "Child device installed"
+    sendEvent(name: "level", value: 0)
+    sendEvent(name: "windowShade", value: "unknown")
+}
+
+def updated() {
+    log.info "Child device updated"
+}
+
+/* --------------------------------------------------
+   WINDOWSHADE CAPABILITY METHODS
+-------------------------------------------------- */
+
+/**
+ * Opens the window shade (sets position to 0)
+ */
 def open() {
-    log.debug "Child open()"
+    logDebug "Opening shade"
     parent.sendChildCommand(device.deviceNetworkId, 0)
-
 }
 
+/**
+ * Closes the window shade (sets position to 100)
+ */
 def close() {
-    log.debug "Child close()"
+    logDebug "Closing shade"
     parent.sendChildCommand(device.deviceNetworkId, 100)
-
 }
 
 def stop() {
-    log.debug "Child stop()"
+    logDebug "Stop shade"
+    // Corrected to use parent.sendChildStop
     parent.sendChildStop(device.deviceNetworkId)
 }
 
@@ -45,13 +68,110 @@ def setPosition(value) {
     parent.sendChildCommand(device.deviceNetworkId, pos)
 }
 
-def setLevel(value) {
-    Integer pos = value as Integer
-    log.debug "Child setLevel(${pos})"
+/**
+ * Starts position change in the specified direction
+ * Required by WindowShade capability
+ * @param direction - "open" or "close"
+ */
+def startPositionChange(String direction) {
+    logDebug "startPositionChange: ${direction}"
+    if (direction == "open") {
+        parent.sendChildCommand(device.deviceNetworkId, 0)
+    } else if (direction == "close") {
+        parent.sendChildCommand(device.deviceNetworkId, 100)
+    } else {
+        log.warn "Unknown direction for startPositionChange: ${direction}"
+    }
+}
+
+/**
+ * Stops position change
+ * Required by WindowShade capability
+ */
+def stopPositionChange() {
+    logDebug "stopPositionChange"
+    // Corrected argument count for parent.sendChildStop
+    parent.sendChildStop(device.deviceNetworkId)
+}
+
+/**
+ * Returns current window shade state
+ */
+def getCurrentState() {
+    return device.currentValue("windowShade")
+}
+
+/* --------------------------------------------------
+   SWITCHLEVEL CAPABILITY METHODS
+-------------------------------------------------- */
+
+/**
+ * Sets the level (position) of the shade
+ * Required by SwitchLevel capability
+ * @param level - Position 0-100 (0=open, 100=closed)
+ */
+def setLevel(level) {
+    setLevel(level, 0)
+}
+
+/**
+ * Sets the level with transition time (transition not supported by bridge)
+ * @param level - Position 0-100
+ * @param transitionTime - Ignored (bridge doesn't support transitions)
+ */
+def setLevel(level, transitionTime) {
+    logDebug "setLevel: ${level}"
+    
+    // Clamp level to valid range
+    Integer pos = Math.max(0, Math.min(100, level as Integer))
+    
     parent.sendChildCommand(device.deviceNetworkId, pos)
 }
+
+/* --------------------------------------------------
+   REFRESH CAPABILITY
+-------------------------------------------------- */
+
+/**
+ * Refreshes the device state from the bridge
+ */
 def refresh() {
-
+    logDebug "Refreshing device state"
     parent.refreshChild(device.deviceNetworkId)
+}
 
+/* --------------------------------------------------
+   PARENT CALLBACK - Called by parent driver to update state
+-------------------------------------------------- */
+
+/**
+ * Called by parent driver when state changes are received
+ * This is an alternative method if parent needs to push updates
+ */
+def updateState(Integer position) {
+    logDebug "updateState: ${position}"
+    
+    def currentLevel = device.currentValue("level")
+    def currentShade = device.currentValue("windowShade")
+
+    // Update level only if changed
+    if (currentLevel != position) {
+        sendEvent(name: "level", value: position)
+    }
+
+    // Determine windowShade state
+    def shadeValue = (position == 0) ? "open" : (position == 100) ? "closed" : "partially open"
+
+    // Update windowShade only if changed
+    if (currentShade != shadeValue) {
+        sendEvent(name: "windowShade", value: shadeValue)
+    }
+
+    // Update lastSeen
+    sendEvent(name: "lastSeen", value: new Date().toString())
+}
+
+/* -------------------------------------------------- */
+def logDebug(msg) {
+    if (debugLogging) log.debug "[Connector Child] ${msg}"
 }
