@@ -1,0 +1,248 @@
+/**
+ * Connector Screen Child Driver
+ * Full implementation supporting all blind types and features
+ * Compatible with: Roller, Venetian, Roman, Honeycomb, Shangri-La, 
+ *                  Roller Shutter, Roller Gate, Awning, TDBU, 
+ *                  Day&Night, Dimming, and Curtain blinds
+ * 
+ * Test v12 3-25-26
+ * Based on protocol: Connector WLAN Integration Protocol v1.03
+ */
+metadata {
+    definition(name: "Connector Screen Child", 
+               namespace: "connector", 
+               author: "Scubamikejax904 & Manus",
+               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Child") 
+    {
+        // Standard capabilities
+        capability "WindowShade"
+        capability "WindowBlind"
+        capability "Actuator"
+        capability "Refresh"
+        capability "Battery"
+        capability "SignalStrength"
+        
+        // Standard commands
+        command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
+        
+        // Angle commands (for Venetian/Vertical blinds)
+        command "setAngle", [[name: "angle", type: "NUMBER", description: "Angle 0-180"]]
+        command "angleOpen"
+        command "angleClose"
+        
+        // TDBU specific commands
+        command "setTDBUPosition", [
+            [name: "positionTop", type: "NUMBER", description: "Top position 0-100"],
+            [name: "positionBottom", type: "NUMBER", description: "Bottom position 0-100"]
+        ]
+        command "setTopPosition", [[name: "position", type: "NUMBER", description: "Top position 0-100"]]
+        command "setBottomPosition", [[name: "position", type: "NUMBER", description: "Bottom position 0-100"]]
+        command "openTop"
+        command "closeTop"
+        command "stopTop"
+        command "openBottom"
+        command "closeBottom"
+        command "stopBottom"
+        
+        // Standard attributes
+        attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
+        attribute "windowBlind", "enum", ["open", "closed", "partially open", "unknown"]
+        attribute "level", "number"
+        attribute "position", "number"
+        
+        // Angle attributes
+        attribute "angle", "number"
+        attribute "tilt", "number"
+        
+        // TDBU attributes
+        attribute "levelTop", "number"
+        attribute "levelBottom", "number"
+        attribute "positionTop", "number"
+        attribute "positionBottom", "number"
+        attribute "operationTop", "string"
+        attribute "operationBottom", "string"
+        attribute "limitStateTop", "string"
+        attribute "limitStateBottom", "string"
+        
+        // Status attributes
+        attribute "lastSeen", "string"
+        attribute "operation", "string"
+        attribute "limitState", "string"
+        attribute "rssi", "number"
+        attribute "batteryLevel", "number"
+        attribute "chargingState", "string"
+        
+        // Device info attributes
+        attribute "blindTypeName", "string"
+        attribute "voltageModeName", "string"
+        attribute "wirelessModeName", "string"
+    }
+    
+    preferences {
+        input name: "presetPosition", type: "number", title: "Preset Position (0-100)", defaultValue: 50, range: "0..100"
+        input name: "invertPosition", type: "bool", title: "Invert Position (0=open, 100=closed)", defaultValue: false
+        input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
+    }
+}
+
+/* -------------------------------------------------- */
+def installed() {
+    log.info "Child device installed"
+    initialize()
+}
+
+def updated() {
+    log.info "Child device updated"
+    initialize()
+}
+
+def initialize() {
+    // Initialize default attribute values
+    sendEvent(name: "windowShade", value: "unknown")
+    sendEvent(name: "windowBlind", value: "unknown")
+    sendEvent(name: "level", value: 0)
+    sendEvent(name: "position", value: 0)
+}
+
+/* --------------------------------------------------
+   STANDARD WINDOWSHADE CAPABILITY COMMANDS
+-------------------------------------------------- */
+def open() {
+    logDebug "Sending open command"
+    parent?.sendChildOpen(device.deviceNetworkId)
+}
+
+def close() {
+    logDebug "Sending close command"
+    parent?.sendChildClose(device.deviceNetworkId)
+}
+
+def stop() {
+    logDebug "Sending stop command"
+    parent?.sendChildStop(device.deviceNetworkId)
+}
+
+def refresh() {
+    logDebug "Refreshing device status"
+    parent?.refreshChild(device.deviceNetworkId)
+}
+
+def setPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos))
+    
+    // Invert if needed
+    if (invertPosition) {
+        pos = 100 - pos
+    }
+    
+    logDebug "Setting position to ${pos}"
+    parent?.sendChildCommand(device.deviceNetworkId, pos)
+}
+
+/* --------------------------------------------------
+   WINDOWSHADE PRESET CAPABILITY
+-------------------------------------------------- */
+def presetPosition() {
+    setPosition(presetPosition ?: 50)
+}
+
+/* --------------------------------------------------
+   ANGLE COMMANDS (Venetian/Vertical Blinds)
+-------------------------------------------------- */
+def setAngle(angle) {
+    def ang = angle as Integer
+    ang = Math.min(180, Math.max(0, ang))
+    logDebug "Setting angle to ${ang}"
+    parent?.sendChildAngleCommand(device.deviceNetworkId, ang)
+}
+
+def angleOpen() {
+    logDebug "Setting angle to open (180)"
+    setAngle(180)
+}
+
+def angleClose() {
+    logDebug "Setting angle to close (0)"
+    setAngle(0)
+}
+
+/* --------------------------------------------------
+   TDBU COMMANDS (Top-Down Bottom-Up)
+-------------------------------------------------- */
+def setTDBUPosition(positionTop, positionBottom) {
+    def posT = positionTop as Integer
+    def posB = positionBottom as Integer
+    posT = Math.min(100, Math.max(0, posT))
+    posB = Math.min(100, Math.max(0, posB))
+    
+    logDebug "Setting TDBU position - Top: ${posT}, Bottom: ${posB}"
+    parent?.sendChildTDBUPosition(device.deviceNetworkId, posT, posB)
+}
+
+def setTopPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos))
+    
+    def currentBottom = device.currentValue("levelBottom") ?: 0
+    logDebug "Setting top position to ${pos}"
+    setTDBUPosition(pos, currentBottom)
+}
+
+def setBottomPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos))
+    
+    def currentTop = device.currentValue("levelTop") ?: 0
+    logDebug "Setting bottom position to ${pos}"
+    setTDBUPosition(currentTop, pos)
+}
+
+def openTop() {
+    logDebug "Opening top"
+    parent?.sendChildTDBUOpen(device.deviceNetworkId, true, false)
+}
+
+def closeTop() {
+    logDebug "Closing top"
+    parent?.sendChildTDBUClose(device.deviceNetworkId, true, false)
+}
+
+def stopTop() {
+    logDebug "Stopping top"
+    parent?.sendChildTDBUStop(device.deviceNetworkId, true, false)
+}
+
+def openBottom() {
+    logDebug "Opening bottom"
+    parent?.sendChildTDBUOpen(device.deviceNetworkId, false, true)
+}
+
+def closeBottom() {
+    logDebug "Closing bottom"
+    parent?.sendChildTDBUClose(device.deviceNetworkId, false, true)
+}
+
+def stopBottom() {
+    logDebug "Stopping bottom"
+    parent?.sendChildTDBUStop(device.deviceNetworkId, false, true)
+}
+
+/* --------------------------------------------------
+   HELPER METHODS
+-------------------------------------------------- */
+def isTDBU() {
+    return device.getDataValue("isTDBU") == "true"
+}
+
+def isBiDirectional() {
+    return device.getDataValue("isBiDirectional") == "true"
+}
+
+def getBlindTypeName() {
+    return device.getDataValue("blindTypeName") ?: "Unknown"
+}
+
+def logDebug(msg) {
+    if (debugLogging) log.debug "[Child ${device.deviceNetworkId}] ${msg}"
+}
