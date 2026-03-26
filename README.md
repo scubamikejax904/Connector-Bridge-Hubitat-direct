@@ -6,6 +6,7 @@ This is an unofficial, community-developed Hubitat Elevation driver for controll
 
 This driver was developed through a collaborative debugging process and incorporates a robust token refresh and command queuing system to ensure reliable communication with the bridge and devices, correcting for several undocumented quirks in the device's API.
 
+## There are no Warranties expressed or Implied with this software, it is Released under Apache-2.0 license 
 ## Features
 
 -   **Automatic Discovery:** Automatically discovers and creates child devices for each blind/shade connected to the bridge.
