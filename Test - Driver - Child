@@ -1,41 +1,28 @@
 /**
- * Connector Screen Child Driver
+ * Connector Screen Child Driver - Polished Edition
  * Full implementation supporting all blind types and features
- * Compatible with: Roller, Venetian, Roman, Honeycomb, Shangri-La, 
- *                  Roller Shutter, Roller Gate, Awning, TDBU, 
- *                  Day&Night, Dimming, and Curtain blinds
  * 
- * Test v12.5 03-26-26 - added start and top position change
- * Based on protocol: Connector WLAN Integration Protocol v1.03
+ *
+ * Test v15 3-26-2026- Single Full Travel Time Setting
  */
 metadata {
     definition(name: "Connector Screen Child", 
                namespace: "connector", 
-               author: "Scubamikejax904 & Manus",
-               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Child"
-) 
+               author: "Scubamikejax904 & Manus") 
     {
-        // Standard capabilities
         capability "WindowShade"
         capability "WindowBlind"
         capability "Actuator"
         capability "Refresh"
         capability "Battery"
         capability "SignalStrength"
-        
-        // Standard commands
+
         command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
-        
-        // WindowBlind capability commands for position change
         command "startPositionChange", [[name: "direction", type: "STRING", description: "Direction: 'open' or 'close'"]]
         command "stopPositionChange"
-        
-        // Angle commands (for Venetian/Vertical blinds)
         command "setAngle", [[name: "angle", type: "NUMBER", description: "Angle 0-180"]]
         command "angleOpen"
         command "angleClose"
-        
-        // TDBU specific commands
         command "setTDBUPosition", [
             [name: "positionTop", type: "NUMBER", description: "Top position 0-100"],
             [name: "positionBottom", type: "NUMBER", description: "Bottom position 0-100"]
@@ -48,18 +35,18 @@ metadata {
         command "openBottom"
         command "closeBottom"
         command "stopBottom"
-        
-        // Standard attributes
+
         attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "windowBlind", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "level", "number"
         attribute "position", "number"
-        
-        // Angle attributes
+        attribute "moving", "enum", ["true", "false"]
+        attribute "direction", "string"
+        attribute "eta", "number"
+        attribute "targetPosition", "number"
+        attribute "lastPosition", "number"
         attribute "angle", "number"
         attribute "tilt", "number"
-        
-        // TDBU attributes
         attribute "levelTop", "number"
         attribute "levelBottom", "number"
         attribute "positionTop", "number"
@@ -68,62 +55,233 @@ metadata {
         attribute "operationBottom", "string"
         attribute "limitStateTop", "string"
         attribute "limitStateBottom", "string"
-        
-        // Status attributes
+        attribute "movingTop", "enum", ["true", "false"]
+        attribute "movingBottom", "enum", ["true", "false"]
+        attribute "etaTop", "number"
+        attribute "etaBottom", "number"
         attribute "lastSeen", "string"
         attribute "operation", "string"
         attribute "limitState", "string"
         attribute "rssi", "number"
         attribute "batteryLevel", "number"
         attribute "chargingState", "string"
-        
-        // Device info attributes
         attribute "blindTypeName", "string"
         attribute "voltageModeName", "string"
         attribute "wirelessModeName", "string"
     }
-    
+
     preferences {
         input name: "presetPosition", type: "number", title: "Preset Position (0-100)", defaultValue: 50, range: "0..100"
-        input name: "invertPosition", type: "bool", title: "Invert Position (0=open, 100=closed)", defaultValue: false
+        input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
+        input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
+        input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
     }
 }
 
 /* -------------------------------------------------- */
 def installed() {
-    log.info "Child device installed"
+    logInfo "Child device installed"
     initialize()
 }
 
 def updated() {
-    log.info "Child device updated"
+    logInfo "Child device updated"
     initialize()
 }
 
 def initialize() {
-    // Initialize default attribute values
     sendEvent(name: "windowShade", value: "unknown")
     sendEvent(name: "windowBlind", value: "unknown")
     sendEvent(name: "level", value: 0)
     sendEvent(name: "position", value: 0)
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "direction", value: "none")
+
+    state.movementState = [
+        isMoving: false,
+        direction: null,
+        startPosition: null,
+        targetPosition: null,
+        startTime: null,
+        estimatedDuration: null,
+        distance: null
+    ]
+
+    state.tdbuMovementState = [
+        top: [ isMoving: false, direction: null, startPosition: null, targetPosition: null, startTime: null, estimatedDuration: null, distance: null ],
+        bottom: [ isMoving: false, direction: null, startPosition: null, targetPosition: null, startTime: null, estimatedDuration: null, distance: null ]
+    ]
+    
+    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s"
+}
+
+/* --------------------------------------------------
+   MOVEMENT TRACKING & INTERPOLATION
+-------------------------------------------------- */
+def startMovementTracking(String direction, Integer targetPos = null) {
+    if (!interpolationEnabled) return
+
+    def currentPos = device.currentValue("level") ?: 0
+    targetPos = targetPos ?: ((direction == "open") ? 0 : 100)
+    
+    // Calculate proportional travel time based on distance
+    def distance = Math.abs(targetPos - currentPos)
+    def estimatedDuration = (distance > 0) ? (fullTravelTime * (distance / 100.0) * 1000) : 0
+    
+    // Minimum 1 second to avoid instant completion
+    estimatedDuration = Math.max(1000, estimatedDuration)
+
+    state.movementState = [
+        isMoving: true,
+        direction: direction,
+        startPosition: currentPos,
+        targetPosition: targetPos,
+        startTime: now(),
+        estimatedDuration: estimatedDuration,
+        distance: distance
+    ]
+
+    sendEvent(name: "moving", value: "true")
+    sendEvent(name: "direction", value: direction)
+    sendEvent(name: "targetPosition", value: targetPos)
+    sendEvent(name: "lastPosition", value: currentPos)
+    sendEvent(name: "eta", value: (estimatedDuration / 1000) as Integer)
+
+    logInfo "Movement tracking: ${direction} from ${currentPos} to ${targetPos} (${distance} units, est. ${(estimatedDuration/1000)}s)"
+
+    unschedule("interpolatePosition")
+    unschedule("interpolateTDBUPosition")
+    scheduleInterpolation()
+}
+
+def stopMovementTracking(Integer finalPosition = null) {
+    unschedule("interpolatePosition")
+    unschedule("interpolateTDBUPosition")
+
+    def wasMoving = state.movementState?.isMoving ?: false
+    
+    // If no final position provided, use fallback chain
+    if (finalPosition == null) {
+        finalPosition = state.movementState?.targetPosition ?: 
+                        device.currentValue("level") ?: 
+                        state.movementState?.startPosition ?: 0
+        logDebug "No final position provided, using fallback: ${finalPosition}"
+    }
+
+    state.movementState = [
+        isMoving: false,
+        direction: null,
+        startPosition: null,
+        targetPosition: null,
+        startTime: null,
+        estimatedDuration: null,
+        distance: null
+    ]
+
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "direction", value: "none")
+    sendEvent(name: "eta", value: 0)
+
+    // Always update position attributes
+    sendEvent(name: "level", value: finalPosition)
+    sendEvent(name: "position", value: finalPosition)
+    updateWindowShadeState(finalPosition)
+
+    if (wasMoving) {
+        logInfo "Movement tracking stopped at position: ${finalPosition}"
+    }
+    
+    // Request fresh status from device after stop
+    runIn(2, "refresh")
+}
+
+def scheduleInterpolation() {
+    if (!interpolationEnabled) return
+    unschedule("interpolatePosition")
+    runInMillis(interpolationInterval * 1000, "interpolatePosition")
+}
+
+def interpolatePosition() {
+    def moveState = state.movementState
+
+    if (!moveState?.isMoving) {
+        return
+    }
+
+    def elapsed = now() - moveState.startTime
+    def duration = moveState.estimatedDuration
+    def start = moveState.startPosition
+    def target = moveState.targetPosition
+
+    // Check if movement should be complete
+    if (elapsed >= duration) {
+        logInfo "Interpolation complete, finalizing position at ${target}"
+        stopMovementTracking(target)
+        return
+    }
+
+    // Calculate interpolated position based on progress
+    def progress = elapsed / duration
+    def distance = target - start
+    def interpolatedPos = Math.round(start + (distance * progress)) as Integer
+    
+    // Clamp to valid range
+    interpolatedPos = Math.min(100, Math.max(0, interpolatedPos))
+    
+    // Calculate remaining time
+    def remainingMs = duration - elapsed
+    def remainingSeconds = Math.round(remainingMs / 1000)
+    
+    // Update attributes
+    sendEvent(name: "level", value: interpolatedPos)
+    sendEvent(name: "position", value: interpolatedPos)
+    sendEvent(name: "eta", value: remainingSeconds)
+    updateWindowShadeState(interpolatedPos)
+    
+    logDebug "Interpolated: ${interpolatedPos}% (${remainingSeconds}s remaining, ${Math.round(progress*100)}% complete)"
+    
+    // Schedule next interpolation
+    scheduleInterpolation()
+}
+
+def updateWindowShadeState(Integer position) {
+    position = position ?: 0
+    def shadeValue
+
+    if (position == 0) {
+        shadeValue = "open"
+    } else if (position == 100) {
+        shadeValue = "closed"
+    } else {
+        shadeValue = "partially open"
+    }
+
+    def currentShade = device.currentValue("windowShade")
+    if (currentShade != shadeValue) {
+        sendEvent(name: "windowShade", value: shadeValue)
+        sendEvent(name: "windowBlind", value: shadeValue)
+    }
 }
 
 /* --------------------------------------------------
    STANDARD WINDOWSHADE CAPABILITY COMMANDS
 -------------------------------------------------- */
 def open() {
-    logDebug "Sending open command"
+    logInfo "Open command received"
+    startMovementTracking("open")
     parent?.sendChildOpen(device.deviceNetworkId)
 }
 
 def close() {
-    logDebug "Sending close command"
+    logInfo "Close command received"
+    startMovementTracking("close")
     parent?.sendChildClose(device.deviceNetworkId)
 }
 
 def stop() {
-    logDebug "Sending stop command"
+    logInfo "Stop command received - current level: ${device.currentValue('level') ?: 'unknown'}"
+    stopMovementTracking()
     parent?.sendChildStop(device.deviceNetworkId)
 }
 
@@ -135,34 +293,34 @@ def refresh() {
 def setPosition(position) {
     def pos = position as Integer
     pos = Math.min(100, Math.max(0, pos))
-    
-    // Invert if needed
-    if (invertPosition) {
-        pos = 100 - pos
-    }
-    
-    logDebug "Setting position to ${pos}"
+
+    def currentPos = device.currentValue("level") ?: 0
+    def direction = (pos < currentPos) ? "open" : "close"
+
+    logInfo "Setting position to ${pos} (from ${currentPos}, direction: ${direction})"
+    startMovementTracking(direction, pos)
     parent?.sendChildCommand(device.deviceNetworkId, pos)
 }
 
 /* --------------------------------------------------
    WINDOWBLIND POSITION CHANGE COMMANDS
-   These support hold-to-move functionality
 -------------------------------------------------- */
 def startPositionChange(String direction) {
     logDebug "Starting position change: ${direction}"
-    
+    startMovementTracking(direction)
+
     if (direction == "open") {
         parent?.sendChildOpen(device.deviceNetworkId)
     } else if (direction == "close") {
         parent?.sendChildClose(device.deviceNetworkId)
     } else {
-        log.warn "Unknown direction for startPositionChange: ${direction}"
+        logWarn "Unknown direction for startPositionChange: ${direction}"
     }
 }
 
 def stopPositionChange() {
     logDebug "Stopping position change"
+    stopMovementTracking()
     parent?.sendChildStop(device.deviceNetworkId)
 }
 
@@ -174,7 +332,7 @@ def presetPosition() {
 }
 
 /* --------------------------------------------------
-   ANGLE COMMANDS (Venetian/Vertical Blinds)
+   ANGLE COMMANDS
 -------------------------------------------------- */
 def setAngle(angle) {
     def ang = angle as Integer
@@ -194,14 +352,14 @@ def angleClose() {
 }
 
 /* --------------------------------------------------
-   TDBU COMMANDS (Top-Down Bottom-Up)
+   TDBU COMMANDS
 -------------------------------------------------- */
 def setTDBUPosition(positionTop, positionBottom) {
     def posT = positionTop as Integer
     def posB = positionBottom as Integer
     posT = Math.min(100, Math.max(0, posT))
     posB = Math.min(100, Math.max(0, posB))
-    
+
     logDebug "Setting TDBU position - Top: ${posT}, Bottom: ${posB}"
     parent?.sendChildTDBUPosition(device.deviceNetworkId, posT, posB)
 }
@@ -209,7 +367,6 @@ def setTDBUPosition(positionTop, positionBottom) {
 def setTopPosition(position) {
     def pos = position as Integer
     pos = Math.min(100, Math.max(0, pos))
-    
     def currentBottom = device.currentValue("levelBottom") ?: 0
     logDebug "Setting top position to ${pos}"
     setTDBUPosition(pos, currentBottom)
@@ -218,7 +375,6 @@ def setTopPosition(position) {
 def setBottomPosition(position) {
     def pos = position as Integer
     pos = Math.min(100, Math.max(0, pos))
-    
     def currentTop = device.currentValue("levelTop") ?: 0
     logDebug "Setting bottom position to ${pos}"
     setTDBUPosition(currentTop, pos)
@@ -226,32 +382,191 @@ def setBottomPosition(position) {
 
 def openTop() {
     logDebug "Opening top"
-    parent?.sendChildTDBUOpen(device.deviceNetworkId, true, false)
+    startTDBUMovementTracking("top", "open")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 1, 2, true, false)
 }
 
 def closeTop() {
     logDebug "Closing top"
-    parent?.sendChildTDBUClose(device.deviceNetworkId, true, false)
+    startTDBUMovementTracking("top", "close")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 0, 2, true, false)
 }
 
 def stopTop() {
     logDebug "Stopping top"
-    parent?.sendChildTDBUStop(device.deviceNetworkId, true, false)
+    stopTDBUMovementTracking("top")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 2, true, false)
 }
 
 def openBottom() {
     logDebug "Opening bottom"
-    parent?.sendChildTDBUOpen(device.deviceNetworkId, false, true)
+    startTDBUMovementTracking("bottom", "open")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 1, false, true)
 }
 
 def closeBottom() {
     logDebug "Closing bottom"
-    parent?.sendChildTDBUClose(device.deviceNetworkId, false, true)
+    startTDBUMovementTracking("bottom", "close")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 0, false, true)
 }
 
 def stopBottom() {
     logDebug "Stopping bottom"
-    parent?.sendChildTDBUStop(device.deviceNetworkId, false, true)
+    stopTDBUMovementTracking("bottom")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 2, false, true)
+}
+
+/* --------------------------------------------------
+   TDBU MOVEMENT TRACKING
+-------------------------------------------------- */
+def startTDBUMovementTracking(String part, String direction) {
+    if (!interpolationEnabled) return
+
+    def currentPos = (part == "top") ? (device.currentValue("levelTop") ?: 0) : (device.currentValue("levelBottom") ?: 0)
+    def targetPos = (direction == "open") ? 0 : 100
+    
+    // Calculate proportional travel time
+    def distance = Math.abs(targetPos - currentPos)
+    def estimatedDuration = (distance > 0) ? (fullTravelTime * (distance / 100.0) * 1000) : 0
+    estimatedDuration = Math.max(1000, estimatedDuration)
+
+    state.tdbuMovementState[part] = [
+        isMoving: true,
+        direction: direction,
+        startPosition: currentPos,
+        targetPosition: targetPos,
+        startTime: now(),
+        estimatedDuration: estimatedDuration,
+        distance: distance
+    ]
+
+    sendEvent(name: "moving${part.capitalize()}", value: "true")
+    sendEvent(name: "eta${part.capitalize()}", value: (estimatedDuration / 1000) as Integer)
+
+    logInfo "TDBU ${part} movement: ${direction} from ${currentPos} to ${targetPos} (${distance} units, est. ${(estimatedDuration/1000)}s)"
+
+    unschedule("interpolateTDBUPosition")
+    scheduleTDBUInterpolation()
+}
+
+def stopTDBUMovementTracking(String part) {
+    unschedule("interpolateTDBUPosition")
+    state.tdbuMovementState[part].isMoving = false
+    state.tdbuMovementState[part].direction = null
+    sendEvent(name: "moving${part.capitalize()}", value: "false")
+    sendEvent(name: "eta${part.capitalize()}", value: 0)
+    logDebug "TDBU ${part} movement tracking stopped"
+}
+
+def scheduleTDBUInterpolation() {
+    if (!interpolationEnabled) return
+    unschedule("interpolateTDBUPosition")
+    runInMillis(interpolationInterval * 1000, "interpolateTDBUPosition")
+}
+
+def interpolateTDBUPosition() {
+    def topState = state.tdbuMovementState?.top
+    def bottomState = state.tdbuMovementState?.bottom
+    def hasMovement = (topState?.isMoving || bottomState?.isMoving)
+
+    if (!hasMovement) {
+        return
+    }
+
+    def newPosTop = null
+    def newPosBottom = null
+
+    // Interpolate Top
+    if (topState?.isMoving) {
+        def elapsed = now() - topState.startTime
+        if (elapsed >= topState.estimatedDuration) {
+            newPosTop = topState.targetPosition
+            stopTDBUMovementTracking("top")
+        } else {
+            def progress = elapsed / topState.estimatedDuration
+            newPosTop = Math.round(topState.startPosition + ((topState.targetPosition - topState.startPosition) * progress)) as Integer
+            newPosTop = Math.min(100, Math.max(0, newPosTop))
+        }
+    }
+
+    // Interpolate Bottom
+    if (bottomState?.isMoving) {
+        def elapsed = now() - bottomState.startTime
+        if (elapsed >= bottomState.estimatedDuration) {
+            newPosBottom = bottomState.targetPosition
+            stopTDBUMovementTracking("bottom")
+        } else {
+            def progress = elapsed / bottomState.estimatedDuration
+            newPosBottom = Math.round(bottomState.startPosition + ((bottomState.targetPosition - bottomState.startPosition) * progress)) as Integer
+            newPosBottom = Math.min(100, Math.max(0, newPosBottom))
+        }
+    }
+
+    // Update events
+    if (newPosTop != null) {
+        sendEvent(name: "levelTop", value: newPosTop)
+        sendEvent(name: "positionTop", value: newPosTop)
+    }
+    if (newPosBottom != null) {
+        sendEvent(name: "levelBottom", value: newPosBottom)
+        sendEvent(name: "positionBottom", value: newPosBottom)
+    }
+
+    // Update combined level
+    if (newPosTop != null || newPosBottom != null) {
+        def avgTop = newPosTop ?: (device.currentValue("levelTop") ?: 0)
+        def avgBottom = newPosBottom ?: (device.currentValue("levelBottom") ?: 0)
+        def avgPos = ((avgTop + avgBottom) / 2) as Integer
+        sendEvent(name: "level", value: avgPos)
+        updateWindowShadeState(avgPos)
+    }
+
+    if (hasMovement) {
+        scheduleTDBUInterpolation()
+    }
+}
+
+/* --------------------------------------------------
+   EXTERNAL STATUS UPDATE HANDLER
+-------------------------------------------------- */
+def updateStatus(Map data) {
+    // Check multiple possible position fields
+    def reportedPos = data.currentPosition ?: data.position ?: data.level
+    
+    if (reportedPos != null) {
+        logDebug "Status update with position: ${reportedPos}"
+        stopMovementTracking(reportedPos as Integer)
+    } else {
+        // Position not in response - stop tracking but don't update position
+        logDebug "Status update without position field, keys: ${data.keySet()}"
+        stopMovementTracking(null)
+    }
+
+    // TDBU positions
+    if (data.currentPosition_T != null) {
+        sendEvent(name: "levelTop", value: data.currentPosition_T as Integer)
+        sendEvent(name: "positionTop", value: data.currentPosition_T as Integer)
+        stopTDBUMovementTracking("top")
+    }
+    if (data.currentPosition_B != null) {
+        sendEvent(name: "levelBottom", value: data.currentPosition_B as Integer)
+        sendEvent(name: "positionBottom", value: data.currentPosition_B as Integer)
+        stopTDBUMovementTracking("bottom")
+    }
+
+    // Other attributes
+    if (data.currentAngle != null) {
+        sendEvent(name: "angle", value: data.currentAngle as Integer)
+        sendEvent(name: "tilt", value: data.currentAngle as Integer)
+    }
+    if (data.batteryLevel != null) {
+        sendEvent(name: "batteryLevel", value: data.batteryLevel)
+        def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as Integer))
+        sendEvent(name: "battery", value: batteryPercent)
+    }
+    if (data.RSSI != null) {
+        sendEvent(name: "rssi", value: data.RSSI)
+    }
 }
 
 /* --------------------------------------------------
@@ -269,6 +584,22 @@ def getBlindTypeName() {
     return device.getDataValue("blindTypeName") ?: "Unknown"
 }
 
-def logDebug(msg) {
+/* --------------------------------------------------
+   LOGGING HELPERS
+-------------------------------------------------- */
+private logInfo(msg) {
+    log.info "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logDebug(msg) {
     if (debugLogging) log.debug "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logWarn(msg) {
+    log.warn "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logError(msg, ex = null) {
+    log.error "[Child ${device.deviceNetworkId}] ${msg}"
+    if (ex) log.exception("Error details", ex)
 }
