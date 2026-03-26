@@ -1,13 +1,11 @@
 /**
-• Connector WLAN Integration - Full Production
-• DD7006 & DD7002B Compatible
-• Complete implementation of Connector WLAN Integration Protocol v1.03
-• Supports: Roller, Venetian, Roman, Honeycomb, Shangri-La, Roller Shutter,
-•           Roller Gate, Awning, TDBU, Day&Night, Dimming, Curtain blinds
-• 
-• Based on protocol documentation: Connector WLAN Integration Protocol - 20240424.pdf
-• Thank you Jcongdon01 for testing with DD7002B Hub
-• Test v12 03-25-2026
+ * Connector WLAN Integration - Full Production
+ * DD7006 & DD7002B Compatible
+ * Complete implementation of Connector WLAN Integration Protocol v1.03
+ * 
+ * Thank you Jcongdon01 for testing with DD7002B Hub
+ *
+ * Test v15 03-26-2026- Updated with stability improvements
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -15,43 +13,33 @@ import hubitat.helper.HexUtils
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
-
 metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
-               author: "Scubamikejax904 & NinjaAI",
-               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
+               author: "Scubamikejax904 & NinjaAI & Qwen"
+              //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
               ) 
     {
         capability "Initialize"
         capability "Refresh"
+        command "discoverDevices"
+        command "getBridgeStatus"
+        command "logBridgeInfo"
+    }
 
-
-    // Discovery commands
-    command "discoverDevices"
-    
-    // Bridge status commands
-    command "getBridgeStatus"
-    
-    // Debug commands
-    command "logBridgeInfo"
+    preferences {
+        input name: "bridgeIp", type: "text", title: "Bridge IP", required: true
+        input name: "bridgeKey", type: "text", title: "Bridge Key (16-char string from app, with hyphens)", required: true
+        input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
+        input name: "offlineTimeout", type: "number", title: "Offline Detection Timeout (minutes, 0=disabled)", defaultValue: 0, required: true
+        input name: "autoRefreshInterval", type: "number", title: "Auto Refresh Interval (minutes, 0=disabled)", defaultValue: 0, required: true
+        input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
+        input name: "bridgePort", type: "number", title: "Bridge UDP Port", defaultValue: 32100, required: true
+    }
 }
-
-preferences {
-    input name: "bridgeIp", type: "text", title: "Bridge IP", required: true
-    input name: "bridgeKey", type: "text", title: "Bridge Key (16-char string from app, with hyphens)", required: true
-    input name: "hubType", type: "enum", title: "Hub Type", options: ["DD7002B", "DD7006", "Auto-Detect"], defaultValue: "Auto-Detect", required: true
-    input name: "offlineTimeout", type: "number", title: "Offline Detection Timeout (minutes, 0=disabled)", defaultValue: 2, required: true
-    input name: "autoRefreshInterval", type: "number", title: "Auto Refresh Interval (minutes, 0=disabled)", defaultValue: 0, required: true
-    input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
-}
-
-}
-
 
 /* --------------------------------------------------
    DEVICE TYPE LOOKUP METHODS
-   Based on protocol documentation
 -------------------------------------------------- */
 def getDeviceTypes() {
     return [
@@ -64,85 +52,51 @@ def getDeviceTypes() {
     ]
 }
 
-
 def getBlindTypes() {
     return [
-        1: "Roller Blinds",
-        2: "Venetian Blinds",
-        3: "Roman Blinds",
-        4: "Honeycomb Blinds",
-        5: "Shangri-La Blinds",
-        6: "Roller Shutter",
-        7: "Roller Gate",
-        8: "Awning",
-        9: "TDBU",
-        10: "Day&Night Blinds",
-        11: "Dimming Blinds",
-        12: "Curtain",
-        13: "Curtain (Open Left)",
+        1: "Roller Blinds", 2: "Venetian Blinds", 3: "Roman Blinds",
+        4: "Honeycomb Blinds", 5: "Shangri-La Blinds", 6: "Roller Shutter",
+        7: "Roller Gate", 8: "Awning", 9: "TDBU", 10: "Day&Night Blinds",
+        11: "Dimming Blinds", 12: "Curtain", 13: "Curtain (Open Left)",
         14: "Curtain (Open Right)"
     ]
 }
 
-
 def getOperationTypes() {
     return [
-        0: "Close/Down",
-        1: "Open/Up",
-        2: "Stop",
-        3: "Set Position",
-        5: "Status Query"
+        0: "Close/Down", 1: "Open/Up", 2: "Stop",
+        3: "Set Position", 5: "Status Query"
     ]
 }
-
 
 def getCurrentStates() {
     return [
-        0: "No Limits",
-        1: "Top-Limit Detected",
-        2: "Bottom-Limit Detected",
-        3: "Limits Detected",
-        4: "3rd-Limit Detected"
+        0: "No Limits", 1: "Top-Limit Detected", 2: "Bottom-Limit Detected",
+        3: "Limits Detected", 4: "3rd-Limit Detected"
     ]
 }
-
 
 def getWirelessModes() {
     return [
-        0: "Uni-direction",
-        1: "Bi-direction",
-        2: "Bi-direction (mechanical limits)",
-        3: "Wi-Fi",
-        4: "Bi-direction (virtual percentage)",
-        5: "Others"
+        0: "Uni-direction", 1: "Bi-direction", 2: "Bi-direction (mechanical limits)",
+        3: "Wi-Fi", 4: "Bi-direction (virtual percentage)", 5: "Others"
     ]
 }
-
 
 def getVoltageModes() {
-    return [
-        0: "AC Motor",
-        1: "DC Motor"
-    ]
+    return [ 0: "AC Motor", 1: "DC Motor" ]
 }
-
 
 def getBridgeStates() {
-    return [
-        1: "Working",
-        2: "Pairing",
-        3: "Updating"
-    ]
+    return [ 1: "Working", 2: "Pairing", 3: "Updating" ]
 }
-
 
 /* -------------------------------------------------- */
 def installed() { initialize() }
 def updated() { unschedule(); initialize() }
 
-
 def initialize() {
-    logDebug "Initializing Connector WLAN Integration..."
+    logInfo "Initializing Connector WLAN Integration..."
     state.token = null
     state.tokenTimestamp = null
     state.commandQueue = []
@@ -150,93 +104,73 @@ def initialize() {
     state.pendingMsgIDs = []
     state.bridgeInfo = [:]
     state.deviceInfo = [:]
+    state.queuePaused = false
 
+    runIn(3, "discoverDevices")
 
-runIn(3, "discoverDevices")
+    if (offlineTimeout != null && offlineTimeout > 0) {
+        runEvery1Minute("checkOffline")
+        logInfo "Offline detection enabled with ${offlineTimeout} minute timeout."
+    } else {
+        logInfo "Offline detection disabled."
+    }
 
-// Only schedule offline check if timeout > 0
-if (offlineTimeout != null && offlineTimeout > 0) {
-    runEvery1Minute("checkOffline")
-    logDebug "Offline detection enabled with ${offlineTimeout} minute timeout."
-} else {
-    logDebug "Offline detection disabled."
+    if (autoRefreshInterval != null && autoRefreshInterval > 0) {
+        schedule("0 */${autoRefreshInterval} * * * ?", "refresh")
+        logInfo "Auto-refresh enabled every ${autoRefreshInterval} minutes."
+    }
 }
-
-// Schedule auto-refresh if enabled
-if (autoRefreshInterval != null && autoRefreshInterval > 0) {
-    schedule("0 */${autoRefreshInterval} * * * ?", "refresh")
-    logDebug "Auto-refresh enabled every ${autoRefreshInterval} minutes."
-}
-
-}
-
 
 /* --------------------------------------------------
-   DISCOVERY - Works for both DD7002B and DD7006A
+   DISCOVERY
 -------------------------------------------------- */
 def discoverDevices() {
-    def payload = [
-        msgType: "GetDeviceList",
-        msgID : now().toString()
-    ]
+    def payload = [ msgType: "GetDeviceList", msgID: now().toString() ]
     sendUdp(payload)
 }
-
 
 /* --------------------------------------------------
    BRIDGE STATUS
 -------------------------------------------------- */
 def getBridgeStatus() {
-    // Bridge status is updated via heartbeat
-    // Return current known status
     def info = state.bridgeInfo ?: [:]
-    log.info "Bridge Status: ${info}"
+    logInfo "Bridge Status: ${info}"
     return info
 }
-
 
 def logBridgeInfo() {
     def info = state.bridgeInfo ?: [:]
     def deviceTypes = getDeviceTypes()
     def bridgeStates = getBridgeStates()
-    log.info "=== Bridge Information ==="
-    log.info "MAC: ${info.mac ?: 'Unknown'}"
-    log.info "Device Type: ${deviceTypes[info.deviceType] ?: info.deviceType}"
-    log.info "Protocol Version: ${info.protocolVersion ?: 'Unknown'}"
-    log.info "Hub Type: ${state.detectedHubType ?: 'Unknown'}"
-    log.info "Current State: ${bridgeStates[info.currentState] ?: info.currentState}"
-    log.info "Number of Devices: ${info.numberOfDevices ?: 0}"
-    log.info "RSSI: ${info.RSSI ?: 'Unknown'}"
-    log.info "=========================="
+    logInfo "=== Bridge Information ==="
+    logInfo "MAC: ${info.mac ?: 'Unknown'}"
+    logInfo "Device Type: ${deviceTypes[info.deviceType] ?: info.deviceType}"
+    logInfo "Protocol Version: ${info.protocolVersion ?: 'Unknown'}"
+    logInfo "Hub Type: ${state.detectedHubType ?: 'Unknown'}"
+    logInfo "Current State: ${bridgeStates[info.currentState] ?: info.currentState}"
+    logInfo "Number of Devices: ${info.numberOfDevices ?: 0}"
+    logInfo "RSSI: ${info.RSSI ?: 'Unknown'}"
+    logInfo "=========================="
 }
-
 
 /* --------------------------------------------------
    HUB TYPE DETECTION
 -------------------------------------------------- */
 def detectHubType(Map json) {
-    // Auto-detect based on response characteristics
     if (hubType != "Auto-Detect") {
         state.detectedHubType = hubType
-        log.info "Hub type set from preferences: ${hubType}"
+        logInfo "Hub type set from preferences: ${hubType}"
         return
     }
 
-
-// Both hubs use same protocol, detection is for logging purposes
-// Protocol version can indicate hub generation
-def protocol = json.ProtocolVersion ?: "unknown"
-
-if (protocol.startsWith("0.")) {
-    state.detectedHubType = "DD7002B or DD7006"
-} else {
-    state.detectedHubType = "DD7006 (newer protocol)"
+    def protocol = json.ProtocolVersion ?: "unknown"
+    if (protocol.startsWith("0.")) {
+        state.detectedHubType = "DD7002B or DD7006"
+    } else {
+        state.detectedHubType = "DD7006 (newer protocol)"
+    }
+    logInfo "Auto-detected hub type: ${state.detectedHubType} (Protocol: ${protocol})"
 }
-
-log.info "Auto-detected hub type: ${state.detectedHubType} (Protocol: ${protocol})"
-
-}
-
 
 /* --------------------------------------------------
    CHILD MANAGEMENT
@@ -246,49 +180,38 @@ def createChild(Map deviceData) {
     def deviceType = deviceData.deviceType
     def deviceTypes = getDeviceTypes()
 
+    if (getChildDevice(mac)) {
+        def child = getChildDevice(mac)
+        child.updateDataValue("deviceType", deviceType)
+        return
+    }
 
-if (getChildDevice(mac)) {
-    // Update existing child's device type if changed
-    def child = getChildDevice(mac)
-    child.updateDataValue("deviceType", deviceType)
-    return
-}
+    def deviceTypeName = deviceTypes[deviceType] ?: "Unknown Device"
+    def isTDBU = (deviceType == "10000001")
 
-def deviceTypeName = deviceTypes[deviceType] ?: "Unknown Device"
-def isTDBU = (deviceType == "10000001")
-
-addChildDevice(
-    "connector",
-    "Connector Screen Child",
-    mac,
-    [
+    addChildDevice("connector", "Connector Screen Child", mac, [
         label: "${deviceTypeName} ${mac[-4..-1]}",
         isComponent: false
-    ]
-)
+    ])
 
-def child = getChildDevice(mac)
-child.updateDataValue("deviceType", deviceType)
-child.updateDataValue("isTDBU", isTDBU ? "true" : "false")
-
-log.info "Created child ${mac} (${deviceTypeName}${isTDBU ? ', TDBU' : ''})"
-
+    def child = getChildDevice(mac)
+    child.updateDataValue("deviceType", deviceType)
+    child.updateDataValue("isTDBU", isTDBU ? "true" : "false")
+    logInfo "Created child ${mac} (${deviceTypeName}${isTDBU ? ', TDBU' : ''})"
 }
-
 
 def cleanupMissingChildren(List discoveredMacs) {
     getChildDevices().each { child ->
         if (!discoveredMacs.contains(child.deviceNetworkId)) {
-            log.warn "Device ${child.deviceNetworkId} no longer reported by bridge, deleting"
+            logWarn "Device ${child.deviceNetworkId} no longer reported by bridge, deleting"
             try {
                 deleteChildDevice(child.deviceNetworkId)
             } catch (Exception e) {
-                log.error "Failed to delete child ${child.deviceNetworkId}: ${e.message}"
+                logError "Failed to delete child ${child.deviceNetworkId}: ${e.message}"
             }
         }
     }
 }
-
 
 /* --------------------------------------------------
    CHILD COMMANDS - Standard
@@ -297,54 +220,36 @@ def sendChildCommand(String mac, Integer position) {
     queueCommand("doSendChildCommand", [mac: mac, position: position])
 }
 
-
 def sendChildAngleCommand(String mac, Integer angle) {
     queueCommand("doSendChildAngleCommand", [mac: mac, angle: angle])
 }
-
 
 def sendChildStop(String mac) {
     queueCommand("doSendChildStop", [mac: mac])
 }
 
-
 def sendChildOpen(String mac) {
     queueCommand("doSendChildOpen", [mac: mac])
 }
-
 
 def sendChildClose(String mac) {
     queueCommand("doSendChildClose", [mac: mac])
 }
 
-
 def refreshChild(String mac) {
     queueCommand("doRefreshChild", [mac: mac])
 }
 
-
 /* --------------------------------------------------
-   CHILD COMMANDS - TDBU (Top-Down Bottom-Up)
+   CHILD COMMANDS - TDBU
 -------------------------------------------------- */
 def sendChildTDBUPosition(String mac, Integer positionTop, Integer positionBottom) {
     queueCommand("doSendChildTDBUPosition", [mac: mac, positionTop: positionTop, positionBottom: positionBottom])
 }
 
-
-def sendChildTDBUOpen(String mac, Boolean top, Boolean bottom) {
-    queueCommand("doSendChildTDBUOperation", [mac: mac, operationTop: 1, operationBottom: 1, top: top, bottom: bottom])
+def sendChildTDBUOperation(String mac, Integer operationTop, Integer operationBottom, Boolean top, Boolean bottom) {
+    queueCommand("doSendChildTDBUOperation", [mac: mac, operationTop: operationTop, operationBottom: operationBottom, top: top, bottom: bottom])
 }
-
-
-def sendChildTDBUClose(String mac, Boolean top, Boolean bottom) {
-    queueCommand("doSendChildTDBUOperation", [mac: mac, operationTop: 0, operationBottom: 0, top: top, bottom: bottom])
-}
-
-
-def sendChildTDBUStop(String mac, Boolean top, Boolean bottom) {
-    queueCommand("doSendChildTDBUOperation", [mac: mac, operationTop: 2, operationBottom: 2, top: top, bottom: bottom])
-}
-
 
 /* --------------------------------------------------
    TOKEN & QUEUE MANAGEMENT
@@ -352,196 +257,163 @@ def sendChildTDBUStop(String mac, Boolean top, Boolean bottom) {
 def queueCommand(String commandName, Map args) {
     logDebug "Queueing command: ${commandName} with args: ${args}"
 
+    def queue = state.commandQueue ?: []
+    queue << [command: commandName, arguments: args]
+    state.commandQueue = queue
 
-def queue = state.commandQueue ?: []
-queue << [command: commandName, arguments: args]
-state.commandQueue = queue
-
-if (!state.token) {
-    discoverDevices()
-} else {
-    processCommandQueue()
+    if (!state.token) {
+        discoverDevices()
+    } else {
+        processCommandQueue()
+    }
 }
-
-}
-
 
 def processCommandQueue() {
+    if (state.queuePaused) {
+        logDebug "Queue paused during token refresh, skipping"
+        return
+    }
+
     def queue = state.commandQueue ?: []
+    if (queue.size() == 0) {
+        logDebug "Command queue is empty."
+        return
+    }
 
+    logDebug "Processing ${queue.size()} command(s) from queue."
+    state.commandQueue = []
 
-if (queue.size() == 0) {
-    logDebug "Command queue is empty."
-    return
+    queue.each { cmdInfo ->
+        logDebug "Executing from queue: ${cmdInfo.command}"
+        this."${cmdInfo.command}"(cmdInfo.arguments)
+    }
 }
-
-logDebug "Processing ${queue.size()} command(s) from queue."
-
-state.commandQueue = []
-
-queue.each { cmdInfo ->
-    logDebug "Executing from queue: ${cmdInfo.command}"
-    this."${cmdInfo.command}"(cmdInfo.arguments)
-}
-
-}
-
 
 /* --------------------------------------------------
    INTERNAL COMMAND IMPLEMENTATIONS - Standard
 -------------------------------------------------- */
 def doSendChildCommand(Map args) {
-    def commandData = [
-        targetPosition: args.position as Integer
+    def commandData = [ targetPosition: args.position as Integer ]
+    String accessToken = generateAccessToken(state.token)
+    if (!accessToken) {
+        logError "Cannot send command, failed to calculate AccessToken."
+        return
+    }
+
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000000"
+
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
     ]
-
-
-String accessToken = generateAccessToken(state.token)
-if (!accessToken) {
-    log.error "Cannot send command, failed to calculate AccessToken."
-    return
+    sendUdp(packet)
 }
-
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000000"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
-}
-
 
 def doSendChildAngleCommand(Map args) {
-    def commandData = [
-        targetAngle: args.angle as Integer
+    def commandData = [ targetAngle: args.angle as Integer ]
+    String accessToken = generateAccessToken(state.token)
+    if (!accessToken) {
+        logError "Cannot send command, failed to calculate AccessToken."
+        return
+    }
+
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000000"
+
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
     ]
-
-
-String accessToken = generateAccessToken(state.token)
-if (!accessToken) {
-    log.error "Cannot send command, failed to calculate AccessToken."
-    return
+    sendUdp(packet)
 }
-
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000000"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
-}
-
 
 def doSendChildStop(Map args) {
-    def commandData = [
-        operation: 2
-    ]
+    def commandData = [ operation: 2 ]
     String accessToken = generateAccessToken(state.token)
     if (!accessToken) {
-        log.error "Cannot send command, failed to calculate AccessToken."
+        logError "Cannot send command, failed to calculate AccessToken."
         return
     }
 
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000000"
 
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000000"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
 }
-
 
 def doSendChildOpen(Map args) {
-    def commandData = [
-        operation: 1
-    ]
+    def commandData = [ operation: 1 ]
     String accessToken = generateAccessToken(state.token)
     if (!accessToken) {
-        log.error "Cannot send command, failed to calculate AccessToken."
+        logError "Cannot send command, failed to calculate AccessToken."
         return
     }
 
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000000"
 
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000000"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
 }
-
 
 def doSendChildClose(Map args) {
-    def commandData = [
-        operation: 0
-    ]
+    def commandData = [ operation: 0 ]
     String accessToken = generateAccessToken(state.token)
     if (!accessToken) {
-        log.error "Cannot send command, failed to calculate AccessToken."
+        logError "Cannot send command, failed to calculate AccessToken."
         return
     }
 
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000000"
 
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000000"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
 }
-
 
 def doRefreshChild(Map args) {
     def child = getChildDevice(args.mac)
     def deviceType = child?.getDataValue("deviceType") ?: "10000000"
 
-
-sendUdp([
-    msgType: "ReadDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: generateAccessToken(state.token)
-])
-
+    sendUdp([
+        msgType: "ReadDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: generateAccessToken(state.token)
+    ])
 }
-
 
 /* --------------------------------------------------
    INTERNAL COMMAND IMPLEMENTATIONS - TDBU
@@ -552,110 +424,87 @@ def doSendChildTDBUPosition(Map args) {
         targetPosition_B: args.positionBottom as Integer
     ]
 
+    String accessToken = generateAccessToken(state.token)
+    if (!accessToken) {
+        logError "Cannot send command, failed to calculate AccessToken."
+        return
+    }
 
-String accessToken = generateAccessToken(state.token)
-if (!accessToken) {
-    log.error "Cannot send command, failed to calculate AccessToken."
-    return
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000001"
+
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
 }
-
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000001"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
-}
-
 
 def doSendChildTDBUOperation(Map args) {
     def commandData = [:]
+    if (args.top) {
+        commandData.operation_T = args.operationTop as Integer
+    }
+    if (args.bottom) {
+        commandData.operation_B = args.operationBottom as Integer
+    }
 
+    String accessToken = generateAccessToken(state.token)
+    if (!accessToken) {
+        logError "Cannot send command, failed to calculate AccessToken."
+        return
+    }
 
-if (args.top) {
-    commandData.operation_T = args.operationTop as Integer
+    def child = getChildDevice(args.mac)
+    def deviceType = child?.getDataValue("deviceType") ?: "10000001"
+
+    def packet = [
+        msgType: "WriteDevice",
+        mac: args.mac,
+        deviceType: deviceType,
+        msgID: now().toString(),
+        AccessToken: accessToken,
+        data: commandData
+    ]
+    sendUdp(packet)
 }
-if (args.bottom) {
-    commandData.operation_B = args.operationBottom as Integer
-}
-
-String accessToken = generateAccessToken(state.token)
-if (!accessToken) {
-    log.error "Cannot send command, failed to calculate AccessToken."
-    return
-}
-
-def child = getChildDevice(args.mac)
-def deviceType = child?.getDataValue("deviceType") ?: "10000001"
-
-def packet = [
-    msgType: "WriteDevice",
-    mac: args.mac,
-    deviceType: deviceType,
-    msgID: now().toString(),
-    AccessToken: accessToken,
-    data: commandData
-]
-sendUdp(packet)
-
-}
-
 
 /* --------------------------------------------------
    ACCESS TOKEN CALCULATION
-   Fixed to match official motion-blinds library
-   Uses PKCS5Padding instead of manual zero-padding
-   Same algorithm works for both DD7002B and DD7006A
 -------------------------------------------------- */
 def generateAccessToken(token) {
     if (!bridgeKey || !token) {
-        log.error "Cannot generate AccessToken: missing key or token"
+        logError "Cannot generate AccessToken: missing key or token"
         return null
     }
 
+    try {
+        SecretKeySpec skeySpec = new SecretKeySpec(bridgeKey.getBytes("UTF-8"), "AES")
+        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, skeySpec)
 
-try {
-    SecretKeySpec skeySpec = new SecretKeySpec(bridgeKey.getBytes("UTF-8"), "AES")
-    Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
-    cipher.init(Cipher.ENCRYPT_MODE, skeySpec)
+        byte[] tokenBytes = token.getBytes("UTF-8")
+        byte[] encrypted = cipher.doFinal(tokenBytes)
+        String hex = HexUtils.byteArrayToHexString(encrypted).toUpperCase()
 
-    byte[] tokenBytes = token.getBytes("UTF-8")
-    
-    // Encrypt directly - PKCS5Padding handles padding automatically
-    // This matches the official motion-blinds Python library behavior
-    byte[] encrypted = cipher.doFinal(tokenBytes)
+        String finalAccessToken = hex
+        if (state.detectedHubType?.contains("DD7006")) {
+            finalAccessToken = hex.substring(0, 32)
+            logDebug "Truncated AccessToken for DD7006: ${finalAccessToken}"
+        }
 
-    String hex = HexUtils.byteArrayToHexString(encrypted).toUpperCase()
-    
-    // Apply conditional truncation based on detected hub type
-    String finalAccessToken = hex
-    if (state.detectedHubType?.contains("DD7006")) {
-        // Truncate for DD7006, assuming the first 32 characters (128 bits) are required.
-        // If this length is incorrect, it needs to be adjusted based on official documentation.
-        finalAccessToken = hex.substring(0, 32)
-        logDebug "Truncated AccessToken for DD7006: ${finalAccessToken}"
+        logDebug "Generated AccessToken (full): ${hex}"
+        return finalAccessToken
+
+    } catch (Exception e) {
+        logError "Encryption Error: ${e.message}"
+        return null
     }
-
-    // Show full AccessToken in debug logs for troubleshooting
-    logDebug "Generated AccessToken (full): ${hex}"
-    logDebug "Input token (from bridge): ${token}"
-    logDebug "Bridge key used: ${bridgeKey}"
-    return finalAccessToken
-
-} catch (Exception e) {
-    log.error "Encryption Error: ${e.message}"
-    return null
 }
-
-}
-
 
 /* --------------------------------------------------
    UDP SEND
@@ -663,76 +512,63 @@ try {
 def sendUdp(Map message) {
     String json = JsonOutput.toJson(message)
 
-
-// Track pending requests by msgID
-if (message.msgID) {
-    def pending = state.pendingMsgIDs ?: []
-    pending << [id: message.msgID, sent: now()]
-    // Keep only last 10 pending requests
-    if (pending.size() > 10) {
-        pending = pending[-10..-1]
+    if (message.msgID) {
+        def pending = state.pendingMsgIDs ?: []
+        pending << [id: message.msgID, sent: now()]
+        if (pending.size() > 10) {
+            pending = pending[-10..-1]
+        }
+        state.pendingMsgIDs = pending
     }
-    state.pendingMsgIDs = pending
+
+    logDebug "UDP -> ${json}"
+
+    def action = new hubitat.device.HubAction(
+        HexUtils.byteArrayToHexString(json.getBytes("UTF-8")),
+        hubitat.device.Protocol.LAN,
+        [
+            type: hubitat.device.HubAction.Type.LAN_TYPE_UDPCLIENT,
+            destinationAddress: "${bridgeIp}:${bridgePort ?: 32100}",
+            encoding: hubitat.device.HubAction.Encoding.HEX_STRING
+        ]
+    )
+    sendHubCommand(action)
 }
-
-// Always show full message in debug logs (including AccessToken)
-logDebug "UDP -> ${json}"
-
-def action = new hubitat.device.HubAction(
-    HexUtils.byteArrayToHexString(json.getBytes("UTF-8")),
-    hubitat.device.Protocol.LAN,
-    [
-        type: hubitat.device.HubAction.Type.LAN_TYPE_UDPCLIENT,
-        destinationAddress: "${bridgeIp}:32100",
-        encoding: hubitat.device.HubAction.Encoding.HEX_STRING
-    ]
-)
-sendHubCommand(action)
-
-}
-
 
 /* --------------------------------------------------
    PARSE - Main message handler
 -------------------------------------------------- */
 def parse(String description) {
+    cleanupPendingMsgIDs()
+    
     def msg = parseLanMessage(description)
     if (!msg?.payload) return
+    
     String jsonString = new String(HexUtils.hexStringToByteArray(msg.payload), "UTF-8")
+    logDebug "UDP Received: ${jsonString}"
 
+    def json = new JsonSlurper().parseText(jsonString)
 
-// Always show full message in debug logs (including token)
-logDebug "UDP Received: ${jsonString}"
-
-def json = new JsonSlurper().parseText(jsonString)
-
-switch(json.msgType) {
-    case "GetDeviceListAck":
-        handleGetDeviceListAck(json)
-        break
-        
-    case "Heartbeat":
-        handleHeartbeat(json)
-        break
-        
-    case "WriteDeviceAck":
-        handleWriteDeviceAck(json)
-        break
-        
-    case "ReadDeviceAck":
-        handleReadDeviceAck(json)
-        break
-        
-    case "Report":
-        handleReport(json)
-        break
-        
-    default:
-        logDebug "Unknown message type: ${json.msgType}"
+    switch(json.msgType) {
+        case "GetDeviceListAck":
+            handleGetDeviceListAck(json)
+            break
+        case "Heartbeat":
+            handleHeartbeat(json)
+            break
+        case "WriteDeviceAck":
+            handleWriteDeviceAck(json)
+            break
+        case "ReadDeviceAck":
+            handleReadDeviceAck(json)
+            break
+        case "Report":
+            handleReport(json)
+            break
+        default:
+            logDebug "Unknown message type: ${json.msgType}"
+    }
 }
-
-}
-
 
 /* --------------------------------------------------
    MESSAGE HANDLERS
@@ -740,110 +576,80 @@ switch(json.msgType) {
 def handleGetDeviceListAck(Map json) {
     state.token = json.token
     state.tokenTimestamp = now()
-    log.info "Session token acquired/refreshed."
+    state.queuePaused = false
+    logInfo "Session token acquired/refreshed."
 
+    state.bridgeInfo = [
+        mac: json.mac,
+        deviceType: json.deviceType,
+        protocolVersion: json.ProtocolVersion
+    ]
 
-// Store bridge info
-state.bridgeInfo = [
-    mac: json.mac,
-    deviceType: json.deviceType,
-    protocolVersion: json.ProtocolVersion
-]
+    detectHubType(json)
+    processCommandQueue()
 
-// Detect hub type from response
-detectHubType(json)
+    def discoveredMacs = []
+    json.data.each { device ->
+        if (device.deviceType in ["10000000", "10000001", "22000000", "22000002", "22000005"]) {
+            createChild(device)
+            discoveredMacs << device.mac
+        }
+    }
+    cleanupMissingChildren(discoveredMacs)
+}
 
-processCommandQueue()
+def handleHeartbeat(Map json) {
+    logInfo "Heartbeat received."
 
-// Track discovered MACs for cleanup
-def discoveredMacs = []
+    if (json.token) {
+        state.token = json.token
+        state.tokenTimestamp = now()
+    }
 
-json.data.each { device ->
-    // Create children for all device types we can control
-    if (device.deviceType in ["10000000", "10000001", "22000000", "22000002", "22000005"]) {
-        createChild(device)
-        discoveredMacs << device.mac
+    if (json.data) {
+        def bridgeStates = getBridgeStates()
+        state.bridgeInfo = state.bridgeInfo ?: [:]
+        state.bridgeInfo.currentState = json.data.currentState
+        state.bridgeInfo.numberOfDevices = json.data.numberOfDevices
+        state.bridgeInfo.RSSI = json.data.RSSI
+
+        sendEvent(name: "bridgeState", value: bridgeStates[json.data.currentState] ?: "Unknown")
+        sendEvent(name: "deviceCount", value: json.data.numberOfDevices)
+        sendEvent(name: "bridgeRSSI", value: json.data.RSSI)
+
+        logDebug "Bridge state: ${bridgeStates[json.data.currentState]}, Devices: ${json.data.numberOfDevices}, RSSI: ${json.data.RSSI}"
     }
 }
 
-// Clean up children that are no longer reported
-cleanupMissingChildren(discoveredMacs)
-
-}
-
-
-def handleHeartbeat(Map json) {
-    log.info "Heartbeat received."
-
-
-// Update token if provided
-if (json.token) {
-    state.token = json.token
-    state.tokenTimestamp = now()
-}
-
-// Update bridge status info
-if (json.data) {
-    def bridgeStates = getBridgeStates()
-    state.bridgeInfo = state.bridgeInfo ?: [:]
-    state.bridgeInfo.currentState = json.data.currentState
-    state.bridgeInfo.numberOfDevices = json.data.numberOfDevices
-    state.bridgeInfo.RSSI = json.data.RSSI
-    
-    // Send events for bridge status
-    sendEvent(name: "bridgeState", value: bridgeStates[json.data.currentState] ?: "Unknown")
-    sendEvent(name: "deviceCount", value: json.data.numberOfDevices)
-    sendEvent(name: "bridgeRSSI", value: json.data.RSSI)
-    
-    logDebug "Bridge state: ${bridgeStates[json.data.currentState]}, Devices: ${json.data.numberOfDevices}, RSSI: ${json.data.RSSI}"
-}
-
-}
-
-
 def handleWriteDeviceAck(Map json) {
     if (json.actionResult == "AccessToken error") {
-        log.warn "AccessToken error \u2014 refreshing token"
+        logWarn "AccessToken error — refreshing token, pausing queue"
         state.token = null
         state.tokenTimestamp = null
+        state.queuePaused = true
         discoverDevices()
         return
     }
 
-
-log.info "WriteDeviceAck received for ${json.mac}"
-
-// Process device status from response
-if (json.data) {
-    updateDeviceStatus(json.mac, json.data)
+    logInfo "WriteDeviceAck received for ${json.mac}"
+    if (json.data) {
+        updateDeviceStatus(json.mac, json.data)
+    }
 }
-
-}
-
 
 def handleReadDeviceAck(Map json) {
-    log.info "ReadDeviceAck received for ${json.mac}"
-
-
-// Process device status
-if (json.data) {
-    updateDeviceStatus(json.mac, json.data)
+    logInfo "ReadDeviceAck received for ${json.mac}"
+    if (json.data) {
+        updateDeviceStatus(json.mac, json.data)
+    }
 }
-
-}
-
 
 def handleReport(Map json) {
-    log.info "Report received for ${json.mac}"
-
-
-// Process device status
-if (json.data) {
-    updateDeviceStatus(json.mac, json.data)
+    logInfo "Report received for ${json.mac}"
+    if (json.data) {
+        updateDeviceStatus(json.mac, json.data)
+    }
 }
-
-}
-
 
 /* --------------------------------------------------
    DEVICE STATUS UPDATE
@@ -855,26 +661,19 @@ def updateDeviceStatus(String mac, Map data) {
         return
     }
 
+    def deviceInfo = state.deviceInfo ?: [:]
+    deviceInfo[mac] = data
+    state.deviceInfo = deviceInfo
 
-// Store device info
-def deviceInfo = state.deviceInfo ?: [:]
-deviceInfo[mac] = data
-state.deviceInfo = deviceInfo
+    def isTDBU = (data.type == 9)
+    if (isTDBU) {
+        updateTDBUDeviceStatus(child, data)
+    } else {
+        updateStandardDeviceStatus(child, data)
+    }
 
-// Check if TDBU device
-def isTDBU = (data.type == 9)
-
-if (isTDBU) {
-    updateTDBUDeviceStatus(child, data)
-} else {
-    updateStandardDeviceStatus(child, data)
+    child.sendEvent(name: "lastSeen", value: new Date().toString())
 }
-
-// Always update lastSeen
-child.sendEvent(name: "lastSeen", value: new Date().toString())
-
-}
-
 
 def updateStandardDeviceStatus(child, Map data) {
     def blindTypes = getBlindTypes()
@@ -883,165 +682,150 @@ def updateStandardDeviceStatus(child, Map data) {
     def voltageModes = getVoltageModes()
     def wirelessModes = getWirelessModes()
 
+    def pos = data.currentPosition as Integer
+    def currentLevel = child.currentValue("level")
+    if (currentLevel != pos) {
+        child.sendEvent(name: "level", value: pos)
+    }
 
-// Position
-def pos = data.currentPosition as Integer
-def currentLevel = child.currentValue("level")
-if (currentLevel != pos) {
-    child.sendEvent(name: "level", value: pos)
+    def currentShade = child.currentValue("windowShade")
+    def shadeValue = (pos == 0) ? "open" : (pos == 100) ? "closed" : "partially open"
+    if (currentShade != shadeValue) {
+        child.sendEvent(name: "windowShade", value: shadeValue)
+    }
+
+    if (data.currentAngle != null) {
+        child.sendEvent(name: "angle", value: data.currentAngle as Integer)
+    }
+
+    if (data.type != null) {
+        def blindName = blindTypes[data.type] ?: "Unknown"
+        child.updateDataValue("blindType", data.type.toString())
+        child.updateDataValue("blindTypeName", blindName)
+    }
+
+    if (data.operation != null) {
+        child.sendEvent(name: "operation", value: operationTypes[data.operation] ?: data.operation)
+    }
+
+    if (data.currentState != null) {
+        child.sendEvent(name: "limitState", value: currentStates[data.currentState] ?: data.currentState)
+    }
+
+    if (data.voltageMode != null) {
+        def voltageModeName = voltageModes[data.voltageMode] ?: "Unknown"
+        child.updateDataValue("voltageMode", data.voltageMode.toString())
+        child.updateDataValue("voltageModeName", voltageModeName)
+    }
+
+    if (data.batteryLevel != null) {
+        child.sendEvent(name: "batteryLevel", value: data.batteryLevel)
+        def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as Integer))
+        child.sendEvent(name: "battery", value: batteryPercent)
+    }
+
+    if (data.chargingState != null) {
+        def isCharging = (data.chargingState == 1)
+        child.sendEvent(name: "chargingState", value: isCharging ? "charging" : "not charging")
+    }
+
+    if (data.wirelessMode != null) {
+        def wirelessModeName = wirelessModes[data.wirelessMode] ?: "Unknown"
+        child.updateDataValue("wirelessMode", data.wirelessMode.toString())
+        child.updateDataValue("wirelessModeName", wirelessModeName)
+        child.updateDataValue("isBiDirectional", (data.wirelessMode == 1) ? "true" : "false")
+    }
+
+    if (data.RSSI != null) {
+        child.sendEvent(name: "rssi", value: data.RSSI)
+    }
 }
-
-// Window shade state
-def currentShade = child.currentValue("windowShade")
-def shadeValue = (pos == 0) ? "open" : (pos == 100) ? "closed" : "partially open"
-if (currentShade != shadeValue) {
-    child.sendEvent(name: "windowShade", value: shadeValue)
-}
-
-// Angle (for Venetian/Vertical blinds)
-if (data.currentAngle != null) {
-    child.sendEvent(name: "angle", value: data.currentAngle as Integer)
-}
-
-// Blind type
-if (data.type != null) {
-    def blindName = blindTypes[data.type] ?: "Unknown"
-    child.updateDataValue("blindType", data.type.toString())
-    child.updateDataValue("blindTypeName", blindName)
-}
-
-// Operation status
-if (data.operation != null) {
-    child.sendEvent(name: "operation", value: operationTypes[data.operation] ?: data.operation)
-}
-
-// Current state (limits)
-if (data.currentState != null) {
-    child.sendEvent(name: "limitState", value: currentStates[data.currentState] ?: data.currentState)
-}
-
-// Voltage mode (AC/DC)
-if (data.voltageMode != null) {
-    def voltageModeName = voltageModes[data.voltageMode] ?: "Unknown"
-    child.updateDataValue("voltageMode", data.voltageMode.toString())
-    child.updateDataValue("voltageModeName", voltageModeName)
-}
-
-// Battery level (DC motors only)
-if (data.batteryLevel != null) {
-    child.sendEvent(name: "batteryLevel", value: data.batteryLevel)
-    
-    // Calculate battery percentage (typical range 700-850 for DC motors)
-    def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as Integer))
-    child.sendEvent(name: "battery", value: batteryPercent)
-}
-
-// Charging state
-if (data.chargingState != null) {
-    def isCharging = (data.chargingState == 1)
-    child.sendEvent(name: "chargingState", value: isCharging ? "charging" : "not charging")
-}
-
-// Wireless mode
-if (data.wirelessMode != null) {
-    def wirelessModeName = wirelessModes[data.wirelessMode] ?: "Unknown"
-    child.updateDataValue("wirelessMode", data.wirelessMode.toString())
-    child.updateDataValue("wirelessModeName", wirelessModeName)
-    
-    // Bi-directional capability flag
-    child.updateDataValue("isBiDirectional", (data.wirelessMode == 1) ? "true" : "false")
-}
-
-// RSSI (signal strength)
-if (data.RSSI != null) {
-    child.sendEvent(name: "rssi", value: data.RSSI)
-}
-
-}
-
 
 def updateTDBUDeviceStatus(child, Map data) {
     def operationTypes = getOperationTypes()
     def currentStates = getCurrentStates()
 
+    def posTop = data.currentPosition_T as Integer
+    child.sendEvent(name: "levelTop", value: posTop)
 
-// Top position
-def posTop = data.currentPosition_T as Integer
-child.sendEvent(name: "levelTop", value: posTop)
+    def posBottom = data.currentPosition_B as Integer
+    child.sendEvent(name: "levelBottom", value: posBottom)
 
-// Bottom position
-def posBottom = data.currentPosition_B as Integer
-child.sendEvent(name: "levelBottom", value: posBottom)
+    def avgPos = ((posTop + posBottom) / 2) as Integer
+    child.sendEvent(name: "level", value: avgPos)
 
-// Main level (average or primary)
-def avgPos = ((posTop + posBottom) / 2) as Integer
-child.sendEvent(name: "level", value: avgPos)
+    def shadeValue = (posBottom == 0) ? "open" : (posBottom == 100) ? "closed" : "partially open"
+    child.sendEvent(name: "windowShade", value: shadeValue)
 
-// Window shade state (based on bottom position)
-def shadeValue = (posBottom == 0) ? "open" : (posBottom == 100) ? "closed" : "partially open"
-child.sendEvent(name: "windowShade", value: shadeValue)
+    if (data.operation_T != null) {
+        child.sendEvent(name: "operationTop", value: operationTypes[data.operation_T] ?: data.operation_T)
+    }
+    if (data.operation_B != null) {
+        child.sendEvent(name: "operationBottom", value: operationTypes[data.operation_B] ?: data.operation_B)
+    }
 
-// Operation status
-if (data.operation_T != null) {
-    child.sendEvent(name: "operationTop", value: operationTypes[data.operation_T] ?: data.operation_T)
+    if (data.currentState_T != null) {
+        child.sendEvent(name: "limitStateTop", value: currentStates[data.currentState_T] ?: data.currentState_T)
+    }
+    if (data.currentState_B != null) {
+        child.sendEvent(name: "limitStateBottom", value: currentStates[data.currentState_B] ?: data.currentState_B)
+    }
+
+    if (data.batteryLevel_T != null) {
+        child.sendEvent(name: "batteryLevelTop", value: data.batteryLevel_T)
+    }
+    if (data.batteryLevel_B != null) {
+        child.sendEvent(name: "batteryLevelBottom", value: data.batteryLevel_B)
+    }
+
+    if (data.RSSI != null) {
+        child.sendEvent(name: "rssi", value: data.RSSI)
+    }
+
+    child.updateDataValue("isTDBU", "true")
+    child.updateDataValue("blindType", "9")
+    child.updateDataValue("blindTypeName", "TDBU")
 }
-if (data.operation_B != null) {
-    child.sendEvent(name: "operationBottom", value: operationTypes[data.operation_B] ?: data.operation_B)
-}
-
-// Current states
-if (data.currentState_T != null) {
-    child.sendEvent(name: "limitStateTop", value: currentStates[data.currentState_T] ?: data.currentState_T)
-}
-if (data.currentState_B != null) {
-    child.sendEvent(name: "limitStateBottom", value: currentStates[data.currentState_B] ?: data.currentState_B)
-}
-
-// Battery levels
-if (data.batteryLevel_T != null) {
-    child.sendEvent(name: "batteryLevelTop", value: data.batteryLevel_T)
-}
-if (data.batteryLevel_B != null) {
-    child.sendEvent(name: "batteryLevelBottom", value: data.batteryLevel_B)
-}
-
-// RSSI
-if (data.RSSI != null) {
-    child.sendEvent(name: "rssi", value: data.RSSI)
-}
-
-// Mark as TDBU
-child.updateDataValue("isTDBU", "true")
-child.updateDataValue("blindType", "9")
-child.updateDataValue("blindTypeName", "TDBU")
-
-}
-
 
 /* --------------------------------------------------
    OFFLINE DETECTION
 -------------------------------------------------- */
 def checkOffline() {
-    // Skip if offline detection is disabled (timeout = 0 or null)
-    if (offlineTimeout == null || offlineTimeout == 0) {
-        return
-    }
+    if (offlineTimeout == null || offlineTimeout == 0) return
 
+    def timeoutSeconds = offlineTimeout * 60
 
-def timeoutSeconds = offlineTimeout * 60
+    getChildDevices().each { child ->
+        def last = child.currentValue("lastSeen")
+        if (!last) return
 
-getChildDevices().each { child ->
-    def last = child.currentValue("lastSeen")
-    if (!last) return
-    def diff = (now() - Date.parse("EEE MMM dd HH:mm:ss z yyyy", last).time) / 1000
-    
-    if (diff > timeoutSeconds && child.currentValue("windowShade") != "unknown") {
-        log.warn "Device ${child.deviceNetworkId} has not been seen for over ${offlineTimeout} minute(s). It may be offline."
+        try {
+            def lastDate = Date.parse("EEE MMM dd HH:mm:ss z yyyy", last)
+            def diff = (now() - lastDate.time) / 1000
+
+            if (diff > timeoutSeconds && child.currentValue("windowShade") != "unknown") {
+                logWarn "Device ${child.deviceNetworkId} offline for ${offlineTimeout}+ minutes"
+                child.sendEvent(name: "deviceStatus", value: "offline")
+            }
+        } catch (Exception e) {
+            logWarn "Could not parse lastSeen for ${child.deviceNetworkId}: ${e.message}"
+        }
     }
 }
 
-}
+/* --------------------------------------------------
+   PENDING MSGID CLEANUP
+-------------------------------------------------- */
+def cleanupPendingMsgIDs() {
+    def pending = state.pendingMsgIDs ?: []
+    def cutoff = now() - 30000
+    def cleaned = pending.findAll { it.sent > cutoff }
 
+    if (cleaned.size() != pending.size()) {
+        state.pendingMsgIDs = cleaned
+        logDebug "Cleaned ${pending.size() - cleaned.size()} stale pending msgIDs"
+    }
+}
 
 /* -------------------------------------------------- */
 def refresh() {
@@ -1050,7 +834,22 @@ def refresh() {
     }
 }
 
+/* --------------------------------------------------
+   LOGGING HELPERS
+-------------------------------------------------- */
+private logInfo(msg) {
+    log.info "[Connector] ${device?.displayName ?: 'Parent'} - ${msg}"
+}
 
-def logDebug(msg) {
-    if (debugLogging) log.debug "[Connector] ${msg}"
+private logDebug(msg) {
+    if (debugLogging) log.debug "[Connector] ${device?.displayName ?: 'Parent'} - ${msg}"
+}
+
+private logWarn(msg) {
+    log.warn "[Connector] ${device?.displayName ?: 'Parent'} - ${msg}"
+}
+
+private logError(msg, ex = null) {
+    log.error "[Connector] ${device?.displayName ?: 'Parent'} - ${msg}"
+    if (ex) log.exception("Error details", ex)
 }
