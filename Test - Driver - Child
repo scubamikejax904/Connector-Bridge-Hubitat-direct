@@ -5,7 +5,7 @@
  *                  Roller Shutter, Roller Gate, Awning, TDBU, 
  *                  Day&Night, Dimming, and Curtain blinds
  * 
- * Test v12 03-25-26
+ * Test v12.5 03-26-26 - added start and top position change
  * Based on protocol: Connector WLAN Integration Protocol v1.03
  */
 metadata {
@@ -25,6 +25,10 @@ metadata {
         
         // Standard commands
         command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
+        
+        // WindowBlind capability commands for position change
+        command "startPositionChange", [[name: "direction", type: "STRING", description: "Direction: 'open' or 'close'"]]
+        command "stopPositionChange"
         
         // Angle commands (for Venetian/Vertical blinds)
         command "setAngle", [[name: "angle", type: "NUMBER", description: "Angle 0-180"]]
@@ -139,6 +143,27 @@ def setPosition(position) {
     
     logDebug "Setting position to ${pos}"
     parent?.sendChildCommand(device.deviceNetworkId, pos)
+}
+
+/* --------------------------------------------------
+   WINDOWBLIND POSITION CHANGE COMMANDS
+   These support hold-to-move functionality
+-------------------------------------------------- */
+def startPositionChange(String direction) {
+    logDebug "Starting position change: ${direction}"
+    
+    if (direction == "open") {
+        parent?.sendChildOpen(device.deviceNetworkId)
+    } else if (direction == "close") {
+        parent?.sendChildClose(device.deviceNetworkId)
+    } else {
+        log.warn "Unknown direction for startPositionChange: ${direction}"
+    }
+}
+
+def stopPositionChange() {
+    logDebug "Stopping position change"
+    parent?.sendChildStop(device.deviceNetworkId)
 }
 
 /* --------------------------------------------------
