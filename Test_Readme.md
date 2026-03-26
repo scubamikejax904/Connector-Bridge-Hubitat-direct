@@ -114,10 +114,11 @@ Your installation is now complete!
 -   **Commands are not working:**
     -   Verify the Bridge Key is entered *exactly* as it appears in the app (16 characters, with hyphens, lowercase).
     -   Go to the parent device page, turn on `Enable Debug Logging`, and save preferences. Try a command and check the logs for `AccessToken error`. This indicates a mismatch between your key and the token from the bridge.
--   **Device status shows "unknown":**
-    -   This should no longer happen with the latest version of the driver. If it does, ensure you have the correct code installed. Click `Refresh` on the parent device page to get the latest status.
-    - Verify that multicast can get through your router/firewall see this post for the hubitat multicast socket test and example log
+    -    Verify that multicast can get through your router/firewall see this post for the hubitat multicast socket test and example log
       [Hubitat community Driver thread](https://community.hubitat.com/t/driver-connector-relay-hubitat-driver-dd7006-p-box-local-control/161608/26?u=scubamikejax904)
 
+-   **Device status shows "unknown":**
+    -   This should no longer happen with the latest version of the driver. If it does, ensure you have the correct code installed. Click `Refresh` on the parent device page to get the latest status.
+   
       
       
