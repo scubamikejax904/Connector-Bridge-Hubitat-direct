@@ -3,16 +3,16 @@
  * For: TDBU Blinds (9) - Top-Down/Bottom-Up
  * 
  * Commands: TDBU-specific (top/bottom positions)
- * - Bridge: 0=Open, 100=Closed
- * - Hubitat: 0=Closed, 100=Open
-* - RCv18
+ * - Invert preference allows matching your hardware
+ * 
+ * RCv19
  */
 metadata {
-    definition(name: "Connector Roller Blind Child", 
+    definition(name: "Connector TDBU Child", 
                namespace: "connector", 
-               author: "Scubamikejax904 & Manus",
+               author: "Scubamikejax904 & Manus"
                //importUrl: "update link"
-              )  
+              ) 
     {
         capability "WindowShade"
         capability "WindowBlind"
@@ -21,10 +21,7 @@ metadata {
         capability "Battery"
         capability "SignalStrength"
 
-        // Position commands
         command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
-        
-        // TDBU commands INCLUDED
         command "setTDBUPosition", [
             [name: "positionTop", type: "NUMBER", description: "Top position 0-100"],
             [name: "positionBottom", type: "NUMBER", description: "Bottom position 0-100"]
@@ -37,12 +34,10 @@ metadata {
         command "openBottom"
         command "closeBottom"
         command "stopBottom"
-        // NO angle commands
 
         attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "windowBlind", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "level", "number"
-        attribute "position", "number"
         attribute "levelTop", "number"
         attribute "levelBottom", "number"
         attribute "positionTop", "number"
@@ -66,6 +61,7 @@ metadata {
         input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
         input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
         input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
+        input name: "invertPosition", type: "bool", title: "Invert Position (Bridge 0=Open, Hubitat 0=Closed)", defaultValue: true, description: "Enable if bridge 0=fully open, 100=fully closed"
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
     }
 }
@@ -93,7 +89,15 @@ def initialize() {
         bottom: [ isMoving: false, direction: null, startPosition: null, targetPosition: null, startTime: null, estimatedDuration: null ]
     ]
     
-    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s"
+    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s, Invert: ${invertPosition}"
+}
+
+/* --------------------------------------------------
+   POSITION INVERSION HELPER
+-------------------------------------------------- */
+private Integer invertIfNeeded(Integer position) {
+    if (position == null) return null
+    return invertPosition ? (100 - position) : position
 }
 
 /* --------------------------------------------------
@@ -192,8 +196,8 @@ def interpolateTDBUPosition() {
    TDBU COMMANDS
 -------------------------------------------------- */
 def setTDBUPosition(positionTop, positionBottom) {
-    def posT = positionTop as Integer
-    def posB = positionBottom as Integer
+    def posT = invertIfNeeded(positionTop as Integer)
+    def posB = invertIfNeeded(positionBottom as Integer)
     posT = Math.min(100, Math.max(0, posT))
     posB = Math.min(100, Math.max(0, posB))
 
@@ -202,7 +206,7 @@ def setTDBUPosition(positionTop, positionBottom) {
 }
 
 def setTopPosition(position) {
-    def pos = position as Integer
+    def pos = invertIfNeeded(position as Integer)
     pos = Math.min(100, Math.max(0, pos))
     def currentBottom = device.currentValue("levelBottom") ?: 0
     logDebug "Setting top position to ${pos}"
@@ -210,7 +214,7 @@ def setTopPosition(position) {
 }
 
 def setBottomPosition(position) {
-    def pos = position as Integer
+    def pos = invertIfNeeded(position as Integer)
     pos = Math.min(100, Math.max(0, pos))
     def currentTop = device.currentValue("levelTop") ?: 0
     logDebug "Setting bottom position to ${pos}"
@@ -262,14 +266,14 @@ def refresh() {
    EXTERNAL STATUS UPDATE HANDLER
 -------------------------------------------------- */
 def updateStatus(Map data) {
-    // TDBU positions (invert for Hubitat)
+    // TDBU positions (invert for Hubitat if enabled)
     if (data.currentPosition_T != null) {
-        def hubitatTop = 100 - (data.currentPosition_T as Integer)
+        def hubitatTop = invertIfNeeded(data.currentPosition_T as Integer)
         sendEvent(name: "levelTop", value: hubitatTop)
         sendEvent(name: "positionTop", value: hubitatTop)
     }
     if (data.currentPosition_B != null) {
-        def hubitatBottom = 100 - (data.currentPosition_B as Integer)
+        def hubitatBottom = invertIfNeeded(data.currentPosition_B as Integer)
         sendEvent(name: "levelBottom", value: hubitatBottom)
         sendEvent(name: "positionBottom", value: hubitatBottom)
     }
