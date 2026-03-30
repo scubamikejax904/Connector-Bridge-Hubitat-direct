@@ -45,7 +45,7 @@ You will need two pieces of information from your setup before installing the dr
     -   A "Reminder" popup will appear showing your unique **KEY**. It will be a 16-character string that includes hyphens (e.g., `74ae544c-d16e-4c`).
     -   **Copy this key exactly as it appears**, including hyphens and respecting the case (it is likely all lowercase).
 
-### Step 2: Install the Parent Driver Code
+### Step 2: Install the Parent & Child Driver Code
 
 1.  In your web browser, navigate to your Hubitat hub's IP address.
 2.  Click on **Drivers Code** in the left-hand menu.
@@ -70,7 +70,6 @@ You will now be on the device page for the bridge you just created.
 1.  In the "Preferences" section, enter the following:
     -   **Bridge IP:** The static IP address of your Connector bridge that you found in Step 1.
     -   **Bridge Key:** The 16-character key (with hyphens) that you got from the app in Step 1.
-    -   **Select Bridge Type** Select either DD7002B or DD7006 (Auto-Detect trys to figure out hub type but if unsecsesful defaults to DD7006)
 2.  Click the **Save Preferences** button.
 
 ### Step 5: Initialize and Discover Devices
@@ -82,9 +81,11 @@ This is the final and most important step.
 3.  Wait about 10-15 seconds. The driver will communicate with the bridge, acquire a token, and automatically create child devices for every blind it finds.
 4.  Refresh the page. You should now see all of your blinds listed as child devices at the bottom of the page.
 
-### Step 6: Configure the Child Device (repeat on every child) **Optional not required**
+### Step 6: Configure the Child Device (repeat on every child) 
+1.  Refresh child device so that it pulls device type, Verify that the driver is the correct one (you may need to manually change the driver)
+    If you need to change it do so and click save and exit.  refresh your browser and open the child device (it should now only have commands that work with your device (**Hubitat's WidnowShade capability includes Tilt angle which isn't used on Roller Shades/Roller Blinds, but there is no way to remove it from the UI so ignore it)
 
-On each child's device details.
+**Optional not required**
 
 1.  In the "Preferences" section, enter the following:
     -   **Full Travel Time:** Enter time in seconds
