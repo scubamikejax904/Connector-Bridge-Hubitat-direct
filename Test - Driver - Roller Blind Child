@@ -7,6 +7,8 @@
  * Commands: Position ONLY (no angle, no TDBU)
  * - Bridge: 0=Open, 100=Closed
  * - Hubitat: 0=Closed, 100=Open
+ * 
+ * - RCv18
  */
 metadata {
     definition(name: "Connector Roller Blind Child", 
