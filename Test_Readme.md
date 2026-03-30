@@ -83,7 +83,7 @@ This is the final and most important step.
 
 ### Step 6: Configure the Child Device (repeat on every child) 
 1.  Refresh child device so that it pulls device type, Verify that the driver is the correct one (you may need to manually change the driver)
-    If you need to change it do so and click save and exit.  refresh your browser and open the child device (it should now only have commands that work with your device (**Hubitat's WidnowShade capability includes Tilt angle which isn't used on Roller Shades/Roller Blinds, but there is no way to remove it from the UI so ignore it)
+    If you need to change it do so and click save and exit.  refresh your browser and open the child device (it should now only have commands that work with your device (**Hubitat's WidnowShade capability includes Tilt angle which isn't used on Roller Shades/Roller Blinds, but there is no way to remove it from the UI so ignore it)**
 
 **Optional not required**
 
