@@ -5,7 +5,8 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * v18 - 03-31-2026
+ * v19 - 03-31-2026 Release
+ * RCv19 - 03-30-2026
  * - Separate child drivers per blind type
  * - Connector Roller Blind Child (types 1,3,4,5,6,7,8,10,11,12,13)
  * - Connector Venetian Child (types 2,14 - supports angle)
@@ -24,7 +25,7 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
+               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/main/Driver%20-%20Parent"
             )
     {
         capability "Initialize"
