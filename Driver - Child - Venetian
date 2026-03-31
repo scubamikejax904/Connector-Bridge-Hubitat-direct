@@ -11,7 +11,7 @@ metadata {
     definition(name: "Connector Venetian Child", 
                namespace: "connector", 
                author: "Scubamikejax904 & Manus"
-               //importUrl: "update link"
+               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/main/Driver%20-%20Child%20-%20Venetian"
               )  
     {
         capability "WindowShade"
