@@ -61,7 +61,7 @@ metadata {
         input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
         input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
         input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
-        input name: "invertPosition", type: "bool", title: "Invert Position (Bridge 0=Open, Hubitat 0=Closed)", defaultValue: true, description: "Enable if bridge 0=fully open, 100=fully closed"
+        input name: "invertPosition", type: "bool", title: "Invert Position (Bridge 0=Open, or Hubitat 0=Closed)", defaultValue: true, description: "Enable if bridge 0=fully open, 100=fully closed.  (In Hubitat 100=fully open & 0=fully closed)"
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
     }
 }
