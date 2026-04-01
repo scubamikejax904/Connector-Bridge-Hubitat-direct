@@ -4,7 +4,7 @@ Full implementation supporting all blind types and features
 Test v20 - Easy Dashboard template support added
 */
 metadata {
-    definition(name: "Connector Screen Child Easy Dash",
+    definition(name: "Connector Roller Blind Child",
     namespace: "connector",
     author: "Scubamikejax904 & Manus",
     //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-screen-child.groovy"
