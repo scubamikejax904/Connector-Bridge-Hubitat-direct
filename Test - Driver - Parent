@@ -3,12 +3,15 @@
  * DD7006 Compatible - Protocol v1.03+
  * Complete implementation of Connector WLAN Integration Protocol v1.03
  * 
- * Test v22 - Simplified for new protocol only
+ * Thank you Jcongdon01 for testing with DD7002B Hub
+ *
+ * Test v23 - Log optimized (manual commands visible, auto-refresh hidden)
  * - Removed bridge type detection (DD7002B legacy support removed)
  * - AccessToken always 32 hex chars per protocol spec v1.03
  * - Manual device cleanup only (prevents breaking automations)
  * - Added removeUnusedDevices command for manual cleanup
  * - Added listOrphanedDevices to preview deletions
+ * - Log optimization: WriteDeviceAck=logInfo, ReadDeviceAck/Report=logDebug
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -20,7 +23,7 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent" 
+               //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-wlan-integration-parent.groovy"
               )
     {
         capability "Initialize"
@@ -28,8 +31,8 @@ metadata {
         command "discoverDevices"
         command "getBridgeStatus"
         command "logBridgeInfo"
-        command "listOrphanedDevices"    // Preview devices not in bridge
-        command "removeUnusedDevices"    // Manual cleanup button
+        command "listOrphanedDevices"
+        command "removeUnusedDevices"
     }
 
     preferences {
@@ -573,7 +576,6 @@ def generateAccessToken(token) {
     }
 
     try {
-        // KEY must be exactly 16 bytes (including hyphens) per API spec v1.03 page 4
         SecretKeySpec skeySpec = new SecretKeySpec(bridgeKey.getBytes("UTF-8"), "AES")
         Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, skeySpec)
@@ -708,6 +710,7 @@ def handleHeartbeat(Map json) {
     }
 }
 
+// ✅ KEPT AS logInfo - Shows manual commands (open/close/stop/setPosition)
 def handleWriteDeviceAck(Map json) {
     if (json.actionResult == "AccessToken error") {
         logWarn "AccessToken error — refreshing token, pausing queue"
@@ -724,15 +727,17 @@ def handleWriteDeviceAck(Map json) {
     }
 }
 
+// ✅ CHANGED TO logDebug - Hides auto-refresh queries
 def handleReadDeviceAck(Map json) {
-    logInfo "ReadDeviceAck received for ${json.mac}"
+    logDebug "ReadDeviceAck received for ${json.mac}"
     if (json.data) {
         updateDeviceStatus(json.mac, json.data)
     }
 }
 
+// ✅ CHANGED TO logDebug - Hides unsolicited status reports
 def handleReport(Map json) {
-    logInfo "Report received for ${json.mac}"
+    logDebug "Report received for ${json.mac}"
     if (json.data) {
         updateDeviceStatus(json.mac, json.data)
     }
