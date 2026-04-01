@@ -1,27 +1,25 @@
 /**
- * Connector TDBU Child Driver
- * For: TDBU Blinds (9) - Top-Down/Bottom-Up
- * 
- * Commands: TDBU-specific (top/bottom positions)
- * - Invert preference allows matching your hardware
- * 
- * RCv19
- */
+Connector TDBU Child Driver - Easy Dashboard Compatible
+For: TDBU Blinds (9) - Top-Down/Bottom-Up
+Commands: TDBU-specific (top/bottom positions)
+Test v22 - Position inversion added (Bridge 0=Open ↔ Hubitat 100=Open)
+*/
 metadata {
-    definition(name: "Connector TDBU Child", 
-               namespace: "connector", 
-               author: "Scubamikejax904 & Manus"
-               //importUrl: "update link"
-              ) 
+    definition(name: "Connector TDBU Child",
+    namespace: "connector",
+    author: "Scubamikejax904 & Manus",
+    //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-tdbu-child.groovy"
+)
     {
         capability "WindowShade"
-        capability "WindowBlind"
         capability "Actuator"
         capability "Refresh"
         capability "Battery"
         capability "SignalStrength"
-
-        command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
+        capability "Switch"
+        capability "Sensor"
+        
+        command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100 (sets both)"]]
         command "setTDBUPosition", [
             [name: "positionTop", type: "NUMBER", description: "Top position 0-100"],
             [name: "positionBottom", type: "NUMBER", description: "Bottom position 0-100"]
@@ -34,39 +32,120 @@ metadata {
         command "openBottom"
         command "closeBottom"
         command "stopBottom"
+        command "on"
+        command "off"
 
         attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
-        attribute "windowBlind", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "level", "number"
+        attribute "position", "number"
         attribute "levelTop", "number"
         attribute "levelBottom", "number"
         attribute "positionTop", "number"
         attribute "positionBottom", "number"
-        attribute "operationTop", "string"
-        attribute "operationBottom", "string"
-        attribute "limitStateTop", "string"
-        attribute "limitStateBottom", "string"
         attribute "movingTop", "enum", ["true", "false"]
         attribute "movingBottom", "enum", ["true", "false"]
+        attribute "moving", "enum", ["true", "false"]
         attribute "etaTop", "number"
         attribute "etaBottom", "number"
+        attribute "eta", "number"
         attribute "lastSeen", "string"
         attribute "rssi", "number"
         attribute "batteryLevelTop", "number"
         attribute "batteryLevelBottom", "number"
+        attribute "batteryLevel", "number"
+        attribute "battery", "number"
         attribute "blindTypeName", "string"
+        attribute "switch", "enum", ["on", "off"]
+    }
+
+    tiles {
+        valueTile("level", "device.level", inactiveLabel: false, decoration: "flat") {
+            state "default", label: '${currentValue}%', action: "setPosition", 
+                range: "(0..100)", backgroundColors: [
+                    [value: 0, color: "#FF0000"],
+                    [value: 50, color: "#FFFF00"],
+                    [value: 100, color: "#44D62C"]
+                ]
+        }
+        
+        valueTile("levelTop", "device.levelTop", inactiveLabel: false, decoration: "flat") {
+            state "default", label: 'Top: ${currentValue}%', action: "setTopPosition", range: "(0..100)"
+        }
+        
+        valueTile("levelBottom", "device.levelBottom", inactiveLabel: false, decoration: "flat") {
+            state "default", label: 'Bottom: ${currentValue}%', action: "setBottomPosition", range: "(0..100)"
+        }
+        
+        standardTile("windowShade", "device.windowShade", inactiveLabel: false, decoration: "flat") {
+            state "open", label: "Open", action: "open", icon: "st.window-shade.open", backgroundColor: "#44D62C"
+            state "closed", label: "Closed", action: "close", icon: "st.window-shade.closed", backgroundColor: "#FF0000"
+            state "partially open", label: "Partial", action: "setPosition", icon: "st.window-shade.partial", backgroundColor: "#FFFF00"
+            state "unknown", label: "Unknown", icon: "st.window-shade.unknown", backgroundColor: "#CCCCCC"
+        }
+        
+        standardTile("refresh", "device.switch", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
+            state "default", label: "", action: "refresh.refresh", icon: "st.secondary.refresh"
+        }
+        
+        valueTile("battery", "device.battery", inactiveLabel: false, decoration: "flat") {
+            state "default", label: '${currentValue}% battery'
+        }
+        
+        valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
+            state "default", label: 'RSSI: ${currentValue}'
+        }
+        
+        main(["level", "windowShade"])
+        details(["level", "levelTop", "levelBottom", "windowShade", "battery", "rssi", "refresh"])
     }
 
     preferences {
         input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
         input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
         input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
-        input name: "invertPosition", type: "bool", title: "Invert Position (Bridge 0=Open, Hubitat 0=Closed)", defaultValue: true, description: "Enable if bridge 0=fully open, 100=fully closed"
+        input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Bridge 0=Open ↔ Hubitat 100=Open)", 
+            defaultValue: true, description: "Enable if bridge reports 0=fully open, 100=fully closed"
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
+        input name: "easyDashboardTemplate", type: "enum", title: "Easy Dashboard Template", 
+            options: ["dual-slider": "Dual Slider (Top/Bottom)", "single-slider": "Single Slider (Average)", "buttons": "Buttons Only", "minimal": "Status Only"], 
+            defaultValue: "dual-slider"
     }
 }
 
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+EASY DASHBOARD COMPATIBILITY
+-------------------------------------------------- */
+def on() {
+    logInfo "Switch ON command received (opening TDBU blind)"
+    open()
+}
+
+def off() {
+    logInfo "Switch OFF command received (closing TDBU blind)"
+    close()
+}
+
+def open() {
+    logInfo "Open command received"
+    openTop()
+    openBottom()
+}
+
+def close() {
+    logInfo "Close command received"
+    closeTop()
+    closeBottom()
+}
+
+def stop() {
+    logInfo "Stop command received"
+    stopTop()
+    stopBottom()
+}
+
+/* --------------------------------------------------
+INITIALIZATION
+-------------------------------------------------- */
 def installed() {
     logInfo "Child device installed"
     initialize()
@@ -79,10 +158,14 @@ def updated() {
 
 def initialize() {
     sendEvent(name: "windowShade", value: "unknown")
-    sendEvent(name: "windowBlind", value: "unknown")
     sendEvent(name: "level", value: 0)
+    sendEvent(name: "position", value: 0)
     sendEvent(name: "levelTop", value: 0)
     sendEvent(name: "levelBottom", value: 0)
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "movingTop", value: "false")
+    sendEvent(name: "movingBottom", value: "false")
+    sendEvent(name: "switch", value: "off")
 
     state.tdbuMovementState = [
         top: [ isMoving: false, direction: null, startPosition: null, targetPosition: null, startTime: null, estimatedDuration: null ],
@@ -93,7 +176,7 @@ def initialize() {
 }
 
 /* --------------------------------------------------
-   POSITION INVERSION HELPER
+POSITION INVERSION HELPER
 -------------------------------------------------- */
 private Integer invertIfNeeded(Integer position) {
     if (position == null) return null
@@ -101,17 +184,19 @@ private Integer invertIfNeeded(Integer position) {
 }
 
 /* --------------------------------------------------
-   TDBU MOVEMENT TRACKING
+TDBU MOVEMENT TRACKING
 -------------------------------------------------- */
 def startTDBUMovementTracking(String part, String direction) {
     if (!interpolationEnabled) return
 
     def currentPos = (part == "top") ? (device.currentValue("levelTop") ?: 0) : (device.currentValue("levelBottom") ?: 0)
-    def targetPos = (direction == "open") ? 100 : 0  // Hubitat: 100=Open, 0=Closed
+    // Hubitat logic: open=100, close=0
+    def targetPos = (direction == "open") ? 100 : 0
     
     def distance = Math.abs(targetPos - currentPos)
-    def estimatedDuration = (distance > 0) ? (fullTravelTime * (distance / 100.0) * 1000) : 0
-    estimatedDuration = Math.max(1000, estimatedDuration)
+    def travelTime = fullTravelTime as long
+    def estimatedDuration = (distance > 0) ? (travelTime * (distance / 100.0) * 1000) as long : 0L
+    estimatedDuration = Math.max(1000L, estimatedDuration)
 
     state.tdbuMovementState[part] = [
         isMoving: true,
@@ -124,9 +209,9 @@ def startTDBUMovementTracking(String part, String direction) {
 
     sendEvent(name: "moving${part.capitalize()}", value: "true")
     sendEvent(name: "eta${part.capitalize()}", value: (estimatedDuration / 1000) as Integer)
+    updateCombinedMovingState()
 
     logInfo "TDBU ${part} movement: ${direction} from ${currentPos} to ${targetPos}"
-
     unschedule("interpolateTDBUPosition")
     runInMillis(interpolationInterval * 1000, "interpolateTDBUPosition")
 }
@@ -136,6 +221,20 @@ def stopTDBUMovementTracking(String part) {
     state.tdbuMovementState[part].direction = null
     sendEvent(name: "moving${part.capitalize()}", value: "false")
     sendEvent(name: "eta${part.capitalize()}", value: 0)
+    updateCombinedMovingState()
+}
+
+def updateCombinedMovingState() {
+    def topMoving = state.tdbuMovementState?.top?.isMoving ?: false
+    def bottomMoving = state.tdbuMovementState?.bottom?.isMoving ?: false
+    def anyMoving = topMoving || bottomMoving
+    
+    sendEvent(name: "moving", value: anyMoving ? "true" : "false")
+    sendEvent(name: "switch", value: anyMoving ? "on" : "off")
+    
+    def etaTop = device.currentValue("etaTop") ?: 0
+    def etaBottom = device.currentValue("etaBottom") ?: 0
+    sendEvent(name: "eta", value: anyMoving ? Math.max(etaTop as int, etaBottom as int) : 0)
 }
 
 def interpolateTDBUPosition() {
@@ -156,7 +255,7 @@ def interpolateTDBUPosition() {
         } else {
             def progress = elapsed / topState.estimatedDuration
             newPosTop = Math.round(topState.startPosition + ((topState.targetPosition - topState.startPosition) * progress)) as Integer
-            newPosTop = Math.min(100, Math.max(0, newPosTop))
+            newPosTop = Math.min(100, Math.max(0, newPosTop)) as int
         }
     }
 
@@ -168,7 +267,7 @@ def interpolateTDBUPosition() {
         } else {
             def progress = elapsed / bottomState.estimatedDuration
             newPosBottom = Math.round(bottomState.startPosition + ((bottomState.targetPosition - bottomState.startPosition) * progress)) as Integer
-            newPosBottom = Math.min(100, Math.max(0, newPosBottom))
+            newPosBottom = Math.min(100, Math.max(0, newPosBottom)) as int
         }
     }
 
@@ -184,7 +283,10 @@ def interpolateTDBUPosition() {
     if (newPosTop != null || newPosBottom != null) {
         def avgTop = newPosTop ?: (device.currentValue("levelTop") ?: 0)
         def avgBottom = newPosBottom ?: (device.currentValue("levelBottom") ?: 0)
-        sendEvent(name: "level", value: ((avgTop + avgBottom) / 2) as Integer)
+        def avgPos = ((avgTop + avgBottom) / 2) as Integer
+        sendEvent(name: "level", value: avgPos)
+        sendEvent(name: "position", value: avgPos)
+        updateWindowShadeState(avgPos)
     }
 
     if (hasMovement) {
@@ -192,22 +294,41 @@ def interpolateTDBUPosition() {
     }
 }
 
+def updateWindowShadeState(Integer position) {
+    position = position ?: 0
+    def shadeValue
+    // Hubitat logic: 100=Open, 0=Closed
+    if (position == 100) {
+        shadeValue = "open"
+    } else if (position == 0) {
+        shadeValue = "closed"
+    } else {
+        shadeValue = "partially open"
+    }
+    
+    def currentShade = device.currentValue("windowShade")
+    if (currentShade != shadeValue) {
+        sendEvent(name: "windowShade", value: shadeValue)
+    }
+}
+
 /* --------------------------------------------------
-   TDBU COMMANDS
+TDBU COMMANDS
 -------------------------------------------------- */
 def setTDBUPosition(positionTop, positionBottom) {
+    // INVERT: Convert Hubitat positions to Bridge positions
     def posT = invertIfNeeded(positionTop as Integer)
     def posB = invertIfNeeded(positionBottom as Integer)
-    posT = Math.min(100, Math.max(0, posT))
-    posB = Math.min(100, Math.max(0, posB))
+    posT = Math.min(100, Math.max(0, posT)) as int
+    posB = Math.min(100, Math.max(0, posB)) as int
 
-    logDebug "Setting TDBU position - Top: ${posT}, Bottom: ${posB}"
+    logDebug "Setting TDBU position - Top: ${posT}, Bottom: ${posB} (Invert: ${invertPosition})"
     parent?.sendChildTDBUPosition(device.deviceNetworkId, posT, posB)
 }
 
 def setTopPosition(position) {
     def pos = invertIfNeeded(position as Integer)
-    pos = Math.min(100, Math.max(0, pos))
+    pos = Math.min(100, Math.max(0, pos)) as int
     def currentBottom = device.currentValue("levelBottom") ?: 0
     logDebug "Setting top position to ${pos}"
     setTDBUPosition(pos, currentBottom)
@@ -215,10 +336,17 @@ def setTopPosition(position) {
 
 def setBottomPosition(position) {
     def pos = invertIfNeeded(position as Integer)
-    pos = Math.min(100, Math.max(0, pos))
+    pos = Math.min(100, Math.max(0, pos)) as int
     def currentTop = device.currentValue("levelTop") ?: 0
     logDebug "Setting bottom position to ${pos}"
     setTDBUPosition(currentTop, pos)
+}
+
+def setPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos)) as int
+    logDebug "Setting TDBU position (both) to ${pos}"
+    setTDBUPosition(pos, pos)
 }
 
 def openTop() {
@@ -263,7 +391,7 @@ def refresh() {
 }
 
 /* --------------------------------------------------
-   EXTERNAL STATUS UPDATE HANDLER
+EXTERNAL STATUS UPDATE HANDLER
 -------------------------------------------------- */
 def updateStatus(Map data) {
     // TDBU positions (invert for Hubitat if enabled)
@@ -278,19 +406,43 @@ def updateStatus(Map data) {
         sendEvent(name: "positionBottom", value: hubitatBottom)
     }
 
+    // Update combined level/position for Easy Dashboard
+    def currentTop = device.currentValue("levelTop") ?: 0
+    def currentBottom = device.currentValue("levelBottom") ?: 0
+    def avgPos = ((currentTop + currentBottom) / 2) as Integer
+    sendEvent(name: "level", value: avgPos)
+    sendEvent(name: "position", value: avgPos)
+    updateWindowShadeState(avgPos)
+
+    // Battery handling
     if (data.batteryLevel_T != null) {
         sendEvent(name: "batteryLevelTop", value: data.batteryLevel_T)
     }
     if (data.batteryLevel_B != null) {
         sendEvent(name: "batteryLevelBottom", value: data.batteryLevel_B)
     }
+    
+    def batTop = data.batteryLevel_T ?: device.currentValue("batteryLevelTop") ?: 700
+    def batBottom = data.batteryLevel_B ?: device.currentValue("batteryLevelBottom") ?: 700
+    def avgBattery = ((batTop + batBottom) / 2) as Integer
+    sendEvent(name: "batteryLevel", value: avgBattery)
+    def batteryPercent = Math.min(100, Math.max(0, ((avgBattery - 700) / 150 * 100) as int)) as int
+    sendEvent(name: "battery", value: batteryPercent)
+    
     if (data.RSSI != null) {
         sendEvent(name: "rssi", value: data.RSSI)
     }
 }
 
 /* --------------------------------------------------
-   LOGGING HELPERS
+HELPER METHODS
+-------------------------------------------------- */
+def getBlindTypeName() {
+    return device.getDataValue("blindTypeName") ?: "TDBU"
+}
+
+/* --------------------------------------------------
+LOGGING HELPERS
 -------------------------------------------------- */
 private logInfo(msg) {
     log.info "[Child ${device.deviceNetworkId}] ${msg}"
