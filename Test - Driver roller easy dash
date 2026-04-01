@@ -1,0 +1,640 @@
+/**
+Connector Screen Child Driver - Easy Dashboard Compatible
+Full implementation supporting all blind types and features
+Test v20 - Easy Dashboard template support added
+*/
+metadata {
+    definition(name: "Connector Screen Child Easy Dash",
+    namespace: "connector",
+    author: "Scubamikejax904 & Manus",
+    //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-screen-child.groovy"
+              )
+    {
+        capability "WindowShade"
+        capability "WindowBlind"
+        capability "Actuator"
+        capability "Refresh"
+        capability "Battery"
+        capability "SignalStrength"
+        capability "Switch"  // ✅ Added for Easy Dashboard compatibility
+        capability "Sensor"  // ✅ Added for Easy Dashboard compatibility
+        
+        command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
+        command "startPositionChange", [[name: "direction", type: "STRING", description: "Direction: 'open' or 'close'"]]
+        command "stopPositionChange"
+        command "setAngle", [[name: "angle", type: "NUMBER", description: "Angle 0-180"]]
+        command "angleOpen"
+        command "angleClose"
+        command "setTDBUPosition", [
+            [name: "positionTop", type: "NUMBER", description: "Top position 0-100"],
+            [name: "positionBottom", type: "NUMBER", description: "Bottom position 0-100"]
+        ]
+        command "setTopPosition", [[name: "position", type: "NUMBER", description: "Top position 0-100"]]
+        command "setBottomPosition", [[name: "position", type: "NUMBER", description: "Bottom position 0-100"]]
+        command "openTop"
+        command "closeTop"
+        command "stopTop"
+        command "openBottom"
+        command "closeBottom"
+        command "stopBottom"
+        command "on"   // ✅ Added for Easy Dashboard switch tiles
+        command "off"  // ✅ Added for Easy Dashboard switch tiles
+
+        attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
+        attribute "windowBlind", "enum", ["open", "closed", "partially open", "unknown"]
+        attribute "level", "number"
+        attribute "position", "number"
+        attribute "moving", "enum", ["true", "false"]
+        attribute "direction", "string"
+        attribute "eta", "number"
+        attribute "targetPosition", "number"
+        attribute "lastPosition", "number"
+        attribute "angle", "number"
+        attribute "tilt", "number"
+        attribute "levelTop", "number"
+        attribute "levelBottom", "number"
+        attribute "positionTop", "number"
+        attribute "positionBottom", "number"
+        attribute "operationTop", "string"
+        attribute "operationBottom", "string"
+        attribute "limitStateTop", "string"
+        attribute "limitStateBottom", "string"
+        attribute "movingTop", "enum", ["true", "false"]
+        attribute "movingBottom", "enum", ["true", "false"]
+        attribute "etaTop", "number"
+        attribute "etaBottom", "number"
+        attribute "lastSeen", "string"
+        attribute "operation", "string"
+        attribute "limitState", "string"
+        attribute "rssi", "number"
+        attribute "batteryLevel", "number"
+        attribute "chargingState", "string"
+        attribute "blindTypeName", "string"
+        attribute "voltageModeName", "string"
+        attribute "wirelessModeName", "string"
+        attribute "switch", "enum", ["on", "off"]  // ✅ Added for Easy Dashboard
+    }
+    
+    // ✅ Easy Dashboard Template Definitions
+    tiles {
+        valueTile("level", "device.level", inactiveLabel: false, decoration: "flat") {
+            state "default", label: '${currentValue}%', action: "setPosition", 
+                range: "(0..100)", backgroundColors: [
+                    [value: 0, color: "#44D62C"],
+                    [value: 50, color: "#FFFF00"],
+                    [value: 100, color: "#FF0000"]
+                ]
+        }
+        
+        standardTile("windowShade", "device.windowShade", inactiveLabel: false, decoration: "flat") {
+            state "open", label: "Open", action: "open", icon: "st.window-shade.open", backgroundColor: "#44D62C"
+            state "closed", label: "Closed", action: "close", icon: "st.window-shade.closed", backgroundColor: "#FF0000"
+            state "partially open", label: "Partial", action: "setPosition", icon: "st.window-shade.partial", backgroundColor: "#FFFF00"
+            state "unknown", label: "Unknown", icon: "st.window-shade.unknown", backgroundColor: "#CCCCCC"
+        }
+        
+        standardTile("refresh", "device.switch", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
+            state "default", label: "", action: "refresh.refresh", icon: "st.secondary.refresh"
+        }
+        
+        valueTile("battery", "device.battery", inactiveLabel: false, decoration: "flat") {
+            state "default", label: '${currentValue}% battery'
+        }
+        
+        valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
+            state "default", label: 'RSSI: ${currentValue}'
+        }
+        
+        main(["level", "windowShade"])
+        details(["level", "windowShade", "battery", "rssi", "refresh"])
+    }
+    
+    // ✅ Easy Dashboard Template Metadata
+    preferences {
+        input name: "presetPosition", type: "number", title: "Preset Position (0-100)", defaultValue: 50, range: "0..100"
+        input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
+        input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
+        input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
+        input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
+        input name: "easyDashboardTemplate", type: "enum", title: "Easy Dashboard Template", 
+            options: ["slider": "Slider + Buttons", "buttons": "Buttons Only", "minimal": "Minimal"], 
+            defaultValue: "slider"
+    }
+}
+
+/* --------------------------------------------------
+EASY DASHBOARD COMPATIBILITY COMMANDS
+-------------------------------------------------- */
+def on() {
+    logInfo "Switch ON command received (opening blind)"
+    open()
+}
+
+def off() {
+    logInfo "Switch OFF command received (closing blind)"
+    close()
+}
+
+/* --------------------------------------------------
+INITIALIZATION
+-------------------------------------------------- */
+def installed() {
+    logInfo "Child device installed"
+    initialize()
+}
+
+def updated() {
+    logInfo "Child device updated"
+    initialize()
+}
+
+def initialize() {
+    sendEvent(name: "windowShade", value: "unknown")
+    sendEvent(name: "windowBlind", value: "unknown")
+    sendEvent(name: "level", value: 0)
+    sendEvent(name: "position", value: 0)
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "direction", value: "none")
+    sendEvent(name: "switch", value: "off")  // ✅ Initialize switch state
+    
+    state.movementState = [
+        isMoving: false,
+        direction: null,
+        startPosition: null,
+        targetPosition: null,
+        startTime: null,
+        estimatedDuration: null,
+        distance: null
+    ]
+
+    state.tdbuMovementState = [
+        top: [ isMoving: false, direction: null, startPosition: null, targetPosition: null, startTime: null, estimatedDuration: null, distance: null ],
+        bottom: [ isMoving: false, direction: null, startPosition: null, targetPosition: null, startTime: null, estimatedDuration: null, distance: null ]
+    ]
+
+    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s"
+}
+
+/* --------------------------------------------------
+MOVEMENT TRACKING & INTERPOLATION
+-------------------------------------------------- */
+def startMovementTracking(String direction, Integer targetPos = null) {
+    if (!interpolationEnabled) return
+    def currentPos = device.currentValue("level") ?: 0
+    targetPos = targetPos ?: ((direction == "open") ? 0 : 100)
+
+    def distance = Math.abs(targetPos - currentPos)
+    def travelTime = fullTravelTime as long
+    def estimatedDuration = (distance > 0) ? (travelTime * (distance / 100.0) * 1000) as long : 0L
+    estimatedDuration = Math.max(1000L, estimatedDuration)
+
+    state.movementState = [
+        isMoving: true,
+        direction: direction,
+        startPosition: currentPos,
+        targetPosition: targetPos,
+        startTime: now(),
+        estimatedDuration: estimatedDuration,
+        distance: distance
+    ]
+
+    sendEvent(name: "moving", value: "true")
+    sendEvent(name: "direction", value: direction)
+    sendEvent(name: "targetPosition", value: targetPos)
+    sendEvent(name: "lastPosition", value: currentPos)
+    sendEvent(name: "eta", value: (estimatedDuration / 1000) as Integer)
+    
+    // ✅ Update switch state for Easy Dashboard
+    sendEvent(name: "switch", value: "on")
+
+    logInfo "Movement tracking: ${direction} from ${currentPos} to ${targetPos} (${distance} units, est. ${(estimatedDuration/1000)}s)"
+
+    unschedule("interpolatePosition")
+    unschedule("interpolateTDBUPosition")
+    scheduleInterpolation()
+}
+
+def stopMovementTracking(Integer finalPosition = null) {
+    unschedule("interpolatePosition")
+    unschedule("interpolateTDBUPosition")
+    def wasMoving = state.movementState?.isMoving ?: false
+
+    if (finalPosition == null) {
+        finalPosition = state.movementState?.targetPosition ?: 
+                        device.currentValue("level") ?: 
+                        state.movementState?.startPosition ?: 0
+        logDebug "No final position provided, using fallback: ${finalPosition}"
+    }
+
+    state.movementState = [
+        isMoving: false,
+        direction: null,
+        startPosition: null,
+        targetPosition: null,
+        startTime: null,
+        estimatedDuration: null,
+        distance: null
+    ]
+
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "direction", value: "none")
+    sendEvent(name: "eta", value: 0)
+    
+    // ✅ Update switch state for Easy Dashboard
+    sendEvent(name: "switch", value: "off")
+
+    sendEvent(name: "level", value: finalPosition)
+    sendEvent(name: "position", value: finalPosition)
+    updateWindowShadeState(finalPosition)
+
+    if (wasMoving) {
+        logInfo "Movement tracking stopped at position: ${finalPosition}"
+    }
+
+    runIn(2, "refresh")
+}
+
+def scheduleInterpolation() {
+    if (!interpolationEnabled) return
+    unschedule("interpolatePosition")
+    runInMillis(interpolationInterval * 1000, "interpolatePosition")
+}
+
+def interpolatePosition() {
+    def moveState = state.movementState
+    if (!moveState?.isMoving) {
+        return
+    }
+
+    def elapsed = now() - moveState.startTime
+    def duration = moveState.estimatedDuration
+    def start = moveState.startPosition
+    def target = moveState.targetPosition
+
+    if (elapsed >= duration) {
+        logInfo "Interpolation complete, finalizing position at ${target}"
+        stopMovementTracking(target)
+        return
+    }
+
+    def progress = elapsed / duration
+    def distance = target - start
+    def interpolatedPos = Math.round(start + (distance * progress)) as Integer
+    interpolatedPos = Math.min(100, Math.max(0, interpolatedPos)) as int
+
+    def remainingMs = duration - elapsed
+    def remainingSeconds = Math.round(remainingMs / 1000)
+
+    sendEvent(name: "level", value: interpolatedPos)
+    sendEvent(name: "position", value: interpolatedPos)
+    sendEvent(name: "eta", value: remainingSeconds)
+    updateWindowShadeState(interpolatedPos)
+
+    logDebug "Interpolated: ${interpolatedPos}% (${remainingSeconds}s remaining, ${Math.round(progress*100)}% complete)"
+
+    scheduleInterpolation()
+}
+
+def updateWindowShadeState(Integer position) {
+    position = position ?: 0
+    def shadeValue
+    if (position == 0) {
+        shadeValue = "open"
+    } else if (position == 100) {
+        shadeValue = "closed"
+    } else {
+        shadeValue = "partially open"
+    }
+
+    def currentShade = device.currentValue("windowShade")
+    if (currentShade != shadeValue) {
+        sendEvent(name: "windowShade", value: shadeValue)
+        sendEvent(name: "windowBlind", value: shadeValue)
+    }
+}
+
+/* --------------------------------------------------
+STANDARD WINDOWSHADE CAPABILITY COMMANDS
+-------------------------------------------------- */
+def open() {
+    logInfo "Open command received"
+    startMovementTracking("open")
+    parent?.sendChildOpen(device.deviceNetworkId)
+}
+
+def close() {
+    logInfo "Close command received"
+    startMovementTracking("close")
+    parent?.sendChildClose(device.deviceNetworkId)
+}
+
+def stop() {
+    logInfo "Stop command received - current level: ${device.currentValue('level') ?: 'unknown'}"
+    stopMovementTracking()
+    parent?.sendChildStop(device.deviceNetworkId)
+}
+
+def refresh() {
+    logDebug "Refreshing device status"
+    parent?.refreshChild(device.deviceNetworkId)
+}
+
+def setPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos)) as int
+    def currentPos = device.currentValue("level") ?: 0
+    def direction = (pos < currentPos) ? "open" : "close"
+
+    logInfo "Setting position to ${pos} (from ${currentPos}, direction: ${direction})"
+    startMovementTracking(direction, pos)
+    parent?.sendChildCommand(device.deviceNetworkId, pos)
+}
+
+/* --------------------------------------------------
+WINDOWBLIND POSITION CHANGE COMMANDS
+-------------------------------------------------- */
+def startPositionChange(String direction) {
+    logDebug "Starting position change: ${direction}"
+    startMovementTracking(direction)
+    if (direction == "open") {
+        parent?.sendChildOpen(device.deviceNetworkId)
+    } else if (direction == "close") {
+        parent?.sendChildClose(device.deviceNetworkId)
+    } else {
+        logWarn "Unknown direction for startPositionChange: ${direction}"
+    }
+}
+
+def stopPositionChange() {
+    logDebug "Stopping position change"
+    stopMovementTracking()
+    parent?.sendChildStop(device.deviceNetworkId)
+}
+
+/* --------------------------------------------------
+WINDOWSHADE PRESET CAPABILITY
+-------------------------------------------------- */
+def presetPosition() {
+    setPosition(presetPosition ?: 50)
+}
+
+/* --------------------------------------------------
+ANGLE COMMANDS
+-------------------------------------------------- */
+def setAngle(angle) {
+    def ang = angle as Integer
+    ang = Math.min(180, Math.max(0, ang)) as int
+    logDebug "Setting angle to ${ang}"
+    parent?.sendChildAngleCommand(device.deviceNetworkId, ang)
+}
+
+def angleOpen() {
+    logDebug "Setting angle to open (180)"
+    setAngle(180)
+}
+
+def angleClose() {
+    logDebug "Setting angle to close (0)"
+    setAngle(0)
+}
+
+/* --------------------------------------------------
+TDBU COMMANDS
+-------------------------------------------------- */
+def setTDBUPosition(positionTop, positionBottom) {
+    def posT = positionTop as Integer
+    def posB = positionBottom as Integer
+    posT = Math.min(100, Math.max(0, posT)) as int
+    posB = Math.min(100, Math.max(0, posB)) as int
+    logDebug "Setting TDBU position - Top: ${posT}, Bottom: ${posB}"
+    parent?.sendChildTDBUPosition(device.deviceNetworkId, posT, posB)
+}
+
+def setTopPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos)) as int
+    def currentBottom = device.currentValue("levelBottom") ?: 0
+    logDebug "Setting top position to ${pos}"
+    setTDBUPosition(pos, currentBottom)
+}
+
+def setBottomPosition(position) {
+    def pos = position as Integer
+    pos = Math.min(100, Math.max(0, pos)) as int
+    def currentTop = device.currentValue("levelTop") ?: 0
+    logDebug "Setting bottom position to ${pos}"
+    setTDBUPosition(currentTop, pos)
+}
+
+def openTop() {
+    logDebug "Opening top"
+    startTDBUMovementTracking("top", "open")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 1, 2, true, false)
+}
+
+def closeTop() {
+    logDebug "Closing top"
+    startTDBUMovementTracking("top", "close")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 0, 2, true, false)
+}
+
+def stopTop() {
+    logDebug "Stopping top"
+    stopTDBUMovementTracking("top")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 2, true, false)
+}
+
+def openBottom() {
+    logDebug "Opening bottom"
+    startTDBUMovementTracking("bottom", "open")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 1, false, true)
+}
+
+def closeBottom() {
+    logDebug "Closing bottom"
+    startTDBUMovementTracking("bottom", "close")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 0, false, true)
+}
+
+def stopBottom() {
+    logDebug "Stopping bottom"
+    stopTDBUMovementTracking("bottom")
+    parent?.sendChildTDBUOperation(device.deviceNetworkId, 2, 2, false, true)
+}
+
+/* --------------------------------------------------
+TDBU MOVEMENT TRACKING
+-------------------------------------------------- */
+def startTDBUMovementTracking(String part, String direction) {
+    if (!interpolationEnabled) return
+    def currentPos = (part == "top") ? (device.currentValue("levelTop") ?: 0) : (device.currentValue("levelBottom") ?: 0)
+    def targetPos = (direction == "open") ? 0 : 100
+
+    def distance = Math.abs(targetPos - currentPos)
+    def travelTime = fullTravelTime as long
+    def estimatedDuration = (distance > 0) ? (travelTime * (distance / 100.0) * 1000) as long : 0L
+    estimatedDuration = Math.max(1000L, estimatedDuration)
+
+    state.tdbuMovementState[part] = [
+        isMoving: true,
+        direction: direction,
+        startPosition: currentPos,
+        targetPosition: targetPos,
+        startTime: now(),
+        estimatedDuration: estimatedDuration,
+        distance: distance
+    ]
+
+    sendEvent(name: "moving${part.capitalize()}", value: "true")
+    sendEvent(name: "eta${part.capitalize()}", value: (estimatedDuration / 1000) as Integer)
+
+    logInfo "TDBU ${part} movement: ${direction} from ${currentPos} to ${targetPos} (${distance} units, est. ${(estimatedDuration/1000)}s)"
+
+    unschedule("interpolateTDBUPosition")
+    scheduleTDBUInterpolation()
+}
+
+def stopTDBUMovementTracking(String part) {
+    unschedule("interpolateTDBUPosition")
+    state.tdbuMovementState[part].isMoving = false
+    state.tdbuMovementState[part].direction = null
+    sendEvent(name: "moving${part.capitalize()}", value: "false")
+    sendEvent(name: "eta${part.capitalize()}", value: 0)
+    logDebug "TDBU ${part} movement tracking stopped"
+}
+
+def scheduleTDBUInterpolation() {
+    if (!interpolationEnabled) return
+    unschedule("interpolateTDBUPosition")
+    runInMillis(interpolationInterval * 1000, "interpolateTDBUPosition")
+}
+
+def interpolateTDBUPosition() {
+    def topState = state.tdbuMovementState?.top
+    def bottomState = state.tdbuMovementState?.bottom
+    def hasMovement = (topState?.isMoving || bottomState?.isMoving)
+    if (!hasMovement) {
+        return
+    }
+
+    def newPosTop = null
+    def newPosBottom = null
+
+    if (topState?.isMoving) {
+        def elapsed = now() - topState.startTime
+        if (elapsed >= topState.estimatedDuration) {
+            newPosTop = topState.targetPosition
+            stopTDBUMovementTracking("top")
+        } else {
+            def progress = elapsed / topState.estimatedDuration
+            newPosTop = Math.round(topState.startPosition + ((topState.targetPosition - topState.startPosition) * progress)) as Integer
+            newPosTop = Math.min(100, Math.max(0, newPosTop)) as int
+        }
+    }
+
+    if (bottomState?.isMoving) {
+        def elapsed = now() - bottomState.startTime
+        if (elapsed >= bottomState.estimatedDuration) {
+            newPosBottom = bottomState.targetPosition
+            stopTDBUMovementTracking("bottom")
+        } else {
+            def progress = elapsed / bottomState.estimatedDuration
+            newPosBottom = Math.round(bottomState.startPosition + ((bottomState.targetPosition - bottomState.startPosition) * progress)) as Integer
+            newPosBottom = Math.min(100, Math.max(0, newPosBottom)) as int
+        }
+    }
+
+    if (newPosTop != null) {
+        sendEvent(name: "levelTop", value: newPosTop)
+        sendEvent(name: "positionTop", value: newPosTop)
+    }
+    if (newPosBottom != null) {
+        sendEvent(name: "levelBottom", value: newPosBottom)
+        sendEvent(name: "positionBottom", value: newPosBottom)
+    }
+
+    if (newPosTop != null || newPosBottom != null) {
+        def avgTop = newPosTop ?: (device.currentValue("levelTop") ?: 0)
+        def avgBottom = newPosBottom ?: (device.currentValue("levelBottom") ?: 0)
+        def avgPos = ((avgTop + avgBottom) / 2) as Integer
+        sendEvent(name: "level", value: avgPos)
+        updateWindowShadeState(avgPos)
+    }
+
+    if (hasMovement) {
+        scheduleTDBUInterpolation()
+    }
+}
+
+/* --------------------------------------------------
+EXTERNAL STATUS UPDATE HANDLER
+-------------------------------------------------- */
+def updateStatus(Map data) {
+    def reportedPos = data.currentPosition ?: data.position ?: data.level
+    if (reportedPos != null) {
+        logDebug "Status update with position: ${reportedPos}"
+        stopMovementTracking(reportedPos as Integer)
+    } else {
+        logDebug "Status update without position field, keys: ${data.keySet()}"
+        stopMovementTracking(null)
+    }
+
+    if (data.currentPosition_T != null) {
+        sendEvent(name: "levelTop", value: data.currentPosition_T as Integer)
+        sendEvent(name: "positionTop", value: data.currentPosition_T as Integer)
+        stopTDBUMovementTracking("top")
+    }
+    if (data.currentPosition_B != null) {
+        sendEvent(name: "levelBottom", value: data.currentPosition_B as Integer)
+        sendEvent(name: "positionBottom", value: data.currentPosition_B as Integer)
+        stopTDBUMovementTracking("bottom")
+    }
+
+    if (data.currentAngle != null) {
+        sendEvent(name: "angle", value: data.currentAngle as Integer)
+        sendEvent(name: "tilt", value: data.currentAngle as Integer)
+    }
+    if (data.batteryLevel != null) {
+        sendEvent(name: "batteryLevel", value: data.batteryLevel)
+        def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as int)) as int
+        sendEvent(name: "battery", value: batteryPercent)
+    }
+    if (data.RSSI != null) {
+        sendEvent(name: "rssi", value: data.RSSI)
+    }
+}
+
+/* --------------------------------------------------
+HELPER METHODS
+-------------------------------------------------- */
+def isTDBU() {
+    return device.getDataValue("isTDBU") == "true"
+}
+
+def isBiDirectional() {
+    return device.getDataValue("isBiDirectional") == "true"
+}
+
+def getBlindTypeName() {
+    return device.getDataValue("blindTypeName") ?: "Unknown"
+}
+
+/* --------------------------------------------------
+LOGGING HELPERS
+-------------------------------------------------- */
+private logInfo(msg) {
+    log.info "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logDebug(msg) {
+    if (debugLogging) log.debug "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logWarn(msg) {
+    log.warn "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logError(msg, ex = null) {
+    log.error "[Child ${device.deviceNetworkId}] ${msg}"
+    if (ex) log.exception("Error details", ex)
+}
