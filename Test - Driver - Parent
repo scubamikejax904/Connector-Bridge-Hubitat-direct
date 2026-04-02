@@ -5,13 +5,7 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Test v23 - Log optimized (manual commands visible, auto-refresh hidden)
- * - Removed bridge type detection (DD7002B legacy support removed)
- * - AccessToken always 32 hex chars per protocol spec v1.03
- * - Manual device cleanup only (prevents breaking automations)
- * - Added removeUnusedDevices command for manual cleanup
- * - Added listOrphanedDevices to preview deletions
- * - Log optimization: WriteDeviceAck=logInfo, ReadDeviceAck/Report=logDebug
+ * Test v24 - Battery Calculation Fix
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -817,8 +811,9 @@ def updateStandardDeviceStatus(child, Map data) {
     }
 
     if (data.batteryLevel != null) {
-        child.sendEvent(name: "batteryLevel", value: data.batteryLevel)
-        def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as int)) as int
+        def batteryLevelVal = data.batteryLevel as Integer
+        child.sendEvent(name: "batteryLevel", value: batteryLevelVal)
+        def batteryPercent = Math.min(100, Math.max(0, ((batteryLevelVal - 700) / 150 * 100) as Integer))
         child.sendEvent(name: "battery", value: batteryPercent)
     }
 
