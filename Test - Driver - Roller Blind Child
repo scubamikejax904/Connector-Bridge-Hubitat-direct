@@ -1,7 +1,7 @@
 /**
 Connector Roller Blind Child Driver - Position Only
 Simplified implementation for standard roller blinds (types 1,3,4,5,6,7,8,10,11,12,13)
-Test v23 - Position only, Easy Dashboard compatible, inversion support, Refactor Battery Calculation
+Test v24 - Position only, Easy Dashboard compatible, inversion support, Refactor Battery Calculation
 DD7002B & DD7006 Compatible - Fixed type coercion issues
 */
 metadata {
