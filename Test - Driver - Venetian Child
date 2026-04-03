@@ -2,7 +2,8 @@
 Connector Venetian Child Driver - Easy Dashboard Compatible
 For: Venetian Blinds (2), Curtain Open Right (14)
 Commands: Position + Angle/Tilt
-Test v22 - Position inversion added (Bridge 0=Open ↔ Hubitat 100=Open)
+Test v27 - Position inversion added (Bridge 0=Open ↔ Hubitat 100=Open)
+DD7002B & DD7006 Compatible - Fixed type coercion issues
 */
 metadata {
     definition(name: "Connector Venetian Child",
@@ -159,13 +160,18 @@ MOVEMENT TRACKING & INTERPOLATION
 -------------------------------------------------- */
 def startMovementTracking(String direction, Integer targetPos = null) {
     if (!interpolationEnabled) return
-    def currentPos = device.currentValue("level") ?: 0
+    
+    // FIX: Explicitly cast currentValue to Integer to avoid Groovy ambiguity on DD7002B
+    def currentPos = (device.currentValue("level") ?: 0) as Integer
     // Hubitat logic: open=100, close=0
-    targetPos = targetPos ?: ((direction == "open") ? 100 : 0)
+    targetPos = (targetPos ?: ((direction == "open") ? 100 : 0)) as Integer
 
-    def distance = Math.abs(targetPos - currentPos)
+    // FIX: Ensure distance calculation uses proper Integer arithmetic
+    def distance = Math.abs(targetPos - currentPos) as Integer
     def travelTime = fullTravelTime as long
-    def estimatedDuration = (distance > 0) ? (travelTime * (distance / 100.0) * 1000) as long : 0L
+    
+    // FIX: Parentheses around cast to fix "unexpected token: /" error
+    def estimatedDuration = (distance > 0) ? (travelTime * ((distance as double) / 100.0) * 1000) as long : 0L
     estimatedDuration = Math.max(1000L, estimatedDuration)
 
     state.movementState = [
@@ -229,23 +235,28 @@ def interpolatePosition() {
     def moveState = state.movementState
     if (!moveState?.isMoving) return
 
-    def elapsed = now() - moveState.startTime
-    def duration = moveState.estimatedDuration
-    def start = moveState.startPosition
-    def target = moveState.targetPosition
+    // FIX: Explicit type casting for DD7002B compatibility
+    def elapsed = (now() - (moveState.startTime as long)) as long
+    def duration = moveState.estimatedDuration as long
+    def start = moveState.startPosition as Integer
+    def target = moveState.targetPosition as Integer
 
     if (elapsed >= duration) {
         stopMovementTracking(target)
         return
     }
 
-    def progress = elapsed / duration
+    // FIX: Use double for progress calculation
+    def progress = ((elapsed as double) / (duration as double))
     def interpolatedPos = Math.round(start + ((target - start) * progress)) as Integer
-    interpolatedPos = Math.min(100, Math.max(0, interpolatedPos)) as int
+    interpolatedPos = Math.min(100, Math.max(0, interpolatedPos)) as Integer
+
+    def remainingMs = (duration - elapsed) as long
+    def remainingSeconds = Math.round(remainingMs / 1000) as Integer
 
     sendEvent(name: "level", value: interpolatedPos)
     sendEvent(name: "position", value: interpolatedPos)
-    sendEvent(name: "eta", value: Math.round((duration - elapsed) / 1000))
+    sendEvent(name: "eta", value: remainingSeconds)
     updateWindowShadeState(interpolatedPos)
     
     runInMillis(interpolationInterval * 1000, "interpolatePosition")
@@ -296,13 +307,13 @@ def refresh() {
 }
 
 def setPosition(position) {
-    def hubitatPos = position as Integer
-    hubitatPos = Math.min(100, Math.max(0, hubitatPos)) as int
+    def hubitatPos = (position as Integer)
+    hubitatPos = Math.min(100, Math.max(0, hubitatPos)) as Integer
     
     // INVERT: Convert Hubitat position to Bridge position before sending
     def bridgePos = invertIfNeeded(hubitatPos)
     
-    def currentPos = device.currentValue("level") ?: 0
+    def currentPos = (device.currentValue("level") ?: 0) as Integer
     def direction = (hubitatPos > currentPos) ? "open" : "close"
 
     logInfo "Setting position to ${hubitatPos} (Bridge: ${bridgePos}, Invert: ${invertPosition})"
@@ -332,8 +343,8 @@ def presetPosition() {
 ANGLE COMMANDS
 -------------------------------------------------- */
 def setAngle(angle) {
-    def ang = angle as Integer
-    ang = Math.min(180, Math.max(0, ang)) as int
+    def ang = (angle as Integer)
+    ang = Math.min(180, Math.max(0, ang)) as Integer
     logDebug "Setting angle to ${ang}"
     parent?.sendChildAngleCommand(device.deviceNetworkId, ang)
 }
@@ -365,11 +376,16 @@ def updateStatus(Map data) {
         sendEvent(name: "angle", value: data.currentAngle as Integer)
         sendEvent(name: "tilt", value: data.currentAngle as Integer)
     }
+    
+    // FIX: Explicit type casting for battery calculation
     if (data.batteryLevel != null) {
-        sendEvent(name: "batteryLevel", value: data.batteryLevel)
-        def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as int)) as int
+        def batteryLevelVal = data.batteryLevel as Integer
+        sendEvent(name: "batteryLevel", value: batteryLevelVal)
+        // FIX: Use 150.0 for floating-point division and proper casting
+        def batteryPercent = Math.min(100, Math.max(0, ((((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer)))
         sendEvent(name: "battery", value: batteryPercent)
     }
+    
     if (data.RSSI != null) {
         sendEvent(name: "rssi", value: data.RSSI)
     }
