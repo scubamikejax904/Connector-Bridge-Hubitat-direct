@@ -366,14 +366,12 @@ def updateStatus(Map data) {
         logDebug "Angle data received but ignored (position-only driver)"
     }
     
-    // FIX: Explicit type casting for battery calculation
-    if (data.batteryLevel != null) {
-        def batteryLevelVal = data.batteryLevel as Integer
-        sendEvent(name: "batteryLevel", value: batteryLevelVal)
-    // FIX: Parentheses around cast for proper order of operations
-        def batteryPercent = Math.min(100, Math.max(0, (((batteryLevelVal - 700) / 150.0) * 100) as Integer))
-        sendEvent(name: "battery", value: batteryPercent)
-    }
+if (data.batteryLevel != null) {
+    def batteryLevelVal = data.batteryLevel as Integer
+    sendEvent(name: "batteryLevel", value: batteryLevelVal)
+    def batteryPercent = Math.min(100, Math.max(0, (((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer))
+    sendEvent(name: "battery", value: batteryPercent)
+}
     
     if (data.chargingState != null) {
         def isCharging = (data.chargingState == 1)
