@@ -2,7 +2,8 @@
 Connector TDBU Child Driver - Easy Dashboard Compatible
 For: TDBU Blinds (9) - Top-Down/Bottom-Up
 Commands: TDBU-specific (top/bottom positions)
-Test v22 - Position inversion added (Bridge 0=Open ↔ Hubitat 100=Open)
+Test v27 - Position inversion added (Bridge 0=Open ↔ Hubitat 100=Open)
+DD7002B & DD7006 Compatible - Fixed type coercion issues
 */
 metadata {
     definition(name: "Connector TDBU Child",
@@ -189,13 +190,13 @@ TDBU MOVEMENT TRACKING
 def startTDBUMovementTracking(String part, String direction) {
     if (!interpolationEnabled) return
 
-    def currentPos = (part == "top") ? (device.currentValue("levelTop") ?: 0) : (device.currentValue("levelBottom") ?: 0)
+    def currentPos = ((part == "top") ? (device.currentValue("levelTop") ?: 0) : (device.currentValue("levelBottom") ?: 0)) as Integer
     // Hubitat logic: open=100, close=0
-    def targetPos = (direction == "open") ? 100 : 0
+    def targetPos = ((direction == "open") ? 100 : 0) as Integer
     
-    def distance = Math.abs(targetPos - currentPos)
+    def distance = Math.abs(targetPos - currentPos) as Integer
     def travelTime = fullTravelTime as long
-    def estimatedDuration = (distance > 0) ? (travelTime * (distance / 100.0) * 1000) as long : 0L
+    def estimatedDuration = (distance > 0) ? (travelTime * ((distance as double) / 100.0) * 1000) as long : 0L
     estimatedDuration = Math.max(1000L, estimatedDuration)
 
     state.tdbuMovementState[part] = [
@@ -232,9 +233,9 @@ def updateCombinedMovingState() {
     sendEvent(name: "moving", value: anyMoving ? "true" : "false")
     sendEvent(name: "switch", value: anyMoving ? "on" : "off")
     
-    def etaTop = device.currentValue("etaTop") ?: 0
-    def etaBottom = device.currentValue("etaBottom") ?: 0
-    sendEvent(name: "eta", value: anyMoving ? Math.max(etaTop as int, etaBottom as int) : 0)
+    def etaTop = (device.currentValue("etaTop") ?: 0) as Integer
+    def etaBottom = (device.currentValue("etaBottom") ?: 0) as Integer
+    sendEvent(name: "eta", value: anyMoving ? Math.max(etaTop, etaBottom) : 0)
 }
 
 def interpolateTDBUPosition() {
@@ -248,26 +249,26 @@ def interpolateTDBUPosition() {
     def newPosBottom = null
 
     if (topState?.isMoving) {
-        def elapsed = now() - topState.startTime
-        if (elapsed >= topState.estimatedDuration) {
-            newPosTop = topState.targetPosition
+        def elapsed = (now() - (topState.startTime as long)) as long
+        if (elapsed >= (topState.estimatedDuration as long)) {
+            newPosTop = topState.targetPosition as Integer
             stopTDBUMovementTracking("top")
         } else {
-            def progress = elapsed / topState.estimatedDuration
+            def progress = ((elapsed as double) / (topState.estimatedDuration as double))
             newPosTop = Math.round(topState.startPosition + ((topState.targetPosition - topState.startPosition) * progress)) as Integer
-            newPosTop = Math.min(100, Math.max(0, newPosTop)) as int
+            newPosTop = Math.min(100, Math.max(0, newPosTop)) as Integer
         }
     }
 
     if (bottomState?.isMoving) {
-        def elapsed = now() - bottomState.startTime
-        if (elapsed >= bottomState.estimatedDuration) {
-            newPosBottom = bottomState.targetPosition
+        def elapsed = (now() - (bottomState.startTime as long)) as long
+        if (elapsed >= (bottomState.estimatedDuration as long)) {
+            newPosBottom = bottomState.targetPosition as Integer
             stopTDBUMovementTracking("bottom")
         } else {
-            def progress = elapsed / bottomState.estimatedDuration
+            def progress = ((elapsed as double) / (bottomState.estimatedDuration as double))
             newPosBottom = Math.round(bottomState.startPosition + ((bottomState.targetPosition - bottomState.startPosition) * progress)) as Integer
-            newPosBottom = Math.min(100, Math.max(0, newPosBottom)) as int
+            newPosBottom = Math.min(100, Math.max(0, newPosBottom)) as Integer
         }
     }
 
@@ -281,9 +282,9 @@ def interpolateTDBUPosition() {
     }
 
     if (newPosTop != null || newPosBottom != null) {
-        def avgTop = newPosTop ?: (device.currentValue("levelTop") ?: 0)
-        def avgBottom = newPosBottom ?: (device.currentValue("levelBottom") ?: 0)
-        def avgPos = ((avgTop + avgBottom) / 2) as Integer
+        def avgTop = (newPosTop ?: (device.currentValue("levelTop") ?: 0)) as Integer
+        def avgBottom = (newPosBottom ?: (device.currentValue("levelBottom") ?: 0)) as Integer
+        def avgPos = (((avgTop + avgBottom) / 2) as double) as Integer
         sendEvent(name: "level", value: avgPos)
         sendEvent(name: "position", value: avgPos)
         updateWindowShadeState(avgPos)
@@ -319,8 +320,8 @@ def setTDBUPosition(positionTop, positionBottom) {
     // INVERT: Convert Hubitat positions to Bridge positions
     def posT = invertIfNeeded(positionTop as Integer)
     def posB = invertIfNeeded(positionBottom as Integer)
-    posT = Math.min(100, Math.max(0, posT)) as int
-    posB = Math.min(100, Math.max(0, posB)) as int
+    posT = Math.min(100, Math.max(0, posT)) as Integer
+    posB = Math.min(100, Math.max(0, posB)) as Integer
 
     logDebug "Setting TDBU position - Top: ${posT}, Bottom: ${posB} (Invert: ${invertPosition})"
     parent?.sendChildTDBUPosition(device.deviceNetworkId, posT, posB)
@@ -328,23 +329,23 @@ def setTDBUPosition(positionTop, positionBottom) {
 
 def setTopPosition(position) {
     def pos = invertIfNeeded(position as Integer)
-    pos = Math.min(100, Math.max(0, pos)) as int
-    def currentBottom = device.currentValue("levelBottom") ?: 0
+    pos = Math.min(100, Math.max(0, pos)) as Integer
+    def currentBottom = (device.currentValue("levelBottom") ?: 0) as Integer
     logDebug "Setting top position to ${pos}"
     setTDBUPosition(pos, currentBottom)
 }
 
 def setBottomPosition(position) {
     def pos = invertIfNeeded(position as Integer)
-    pos = Math.min(100, Math.max(0, pos)) as int
-    def currentTop = device.currentValue("levelTop") ?: 0
+    pos = Math.min(100, Math.max(0, pos)) as Integer
+    def currentTop = (device.currentValue("levelTop") ?: 0) as Integer
     logDebug "Setting bottom position to ${pos}"
     setTDBUPosition(currentTop, pos)
 }
 
 def setPosition(position) {
     def pos = position as Integer
-    pos = Math.min(100, Math.max(0, pos)) as int
+    pos = Math.min(100, Math.max(0, pos)) as Integer
     logDebug "Setting TDBU position (both) to ${pos}"
     setTDBUPosition(pos, pos)
 }
@@ -407,26 +408,29 @@ def updateStatus(Map data) {
     }
 
     // Update combined level/position for Easy Dashboard
-    def currentTop = device.currentValue("levelTop") ?: 0
-    def currentBottom = device.currentValue("levelBottom") ?: 0
-    def avgPos = ((currentTop + currentBottom) / 2) as Integer
+    def currentTop = (device.currentValue("levelTop") ?: 0) as Integer
+    def currentBottom = (device.currentValue("levelBottom") ?: 0) as Integer
+    def avgPos = (((currentTop + currentBottom) / 2) as double) as Integer
     sendEvent(name: "level", value: avgPos)
     sendEvent(name: "position", value: avgPos)
     updateWindowShadeState(avgPos)
 
-    // Battery handling
+    // Battery handling - FIX: Explicit type casting for DD7002B compatibility
     if (data.batteryLevel_T != null) {
-        sendEvent(name: "batteryLevelTop", value: data.batteryLevel_T)
+        def batteryLevelTopVal = data.batteryLevel_T as Integer
+        sendEvent(name: "batteryLevelTop", value: batteryLevelTopVal)
     }
     if (data.batteryLevel_B != null) {
-        sendEvent(name: "batteryLevelBottom", value: data.batteryLevel_B)
+        def batteryLevelBottomVal = data.batteryLevel_B as Integer
+        sendEvent(name: "batteryLevelBottom", value: batteryLevelBottomVal)
     }
     
-    def batTop = data.batteryLevel_T ?: device.currentValue("batteryLevelTop") ?: 700
-    def batBottom = data.batteryLevel_B ?: device.currentValue("batteryLevelBottom") ?: 700
-    def avgBattery = ((batTop + batBottom) / 2) as Integer
+    def batTop = (data.batteryLevel_T ?: device.currentValue("batteryLevelTop") ?: 700) as Integer
+    def batBottom = (data.batteryLevel_B ?: device.currentValue("batteryLevelBottom") ?: 700) as Integer
+    def avgBattery = (((batTop + batBottom) / 2) as double) as Integer
     sendEvent(name: "batteryLevel", value: avgBattery)
-    def batteryPercent = Math.min(100, Math.max(0, ((avgBattery - 700) / 150 * 100) as int)) as int
+    // FIX: Use 150.0 for floating-point division and proper casting
+    def batteryPercent = Math.min(100, Math.max(0, ((((avgBattery - 700) as double) / 150.0 * 100) as Integer)))
     sendEvent(name: "battery", value: batteryPercent)
     
     if (data.RSSI != null) {
