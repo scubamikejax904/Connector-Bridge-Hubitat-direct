@@ -2,8 +2,10 @@
 Connector Venetian Child Driver - Easy Dashboard Compatible
 For: Venetian Blinds (2), Curtain Open Right (14)
 Commands: Position + Angle/Tilt
-Test v27 - Position inversion added (Bridge 0=Open ↔ Hubitat 100=Open)
+Test v29 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion
 DD7002B & DD7006 Compatible - Fixed type coercion issues
+NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
+Angle/Tilt values (0-180) are passed through unchanged - no inversion needed.
 */
 metadata {
     definition(name: "Connector Venetian Child",
@@ -91,8 +93,9 @@ metadata {
         input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
         input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
         input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
-        input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Bridge 0=Open ↔ Hubitat 100=Open)", 
-            defaultValue: true, description: "Enable if bridge reports 0=fully open, 100=fully closed"
+        // NOTE: invertPosition preference kept for backward compatibility but NOT USED - parent handles inversion
+        //input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Deprecated - Parent handles inversion)", 
+            //defaultValue: true, description: "This setting is now handled by the Parent driver. Child uses Hubitat logic (100=Open, 0=Closed)."
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
         input name: "easyDashboardTemplate", type: "enum", title: "Easy Dashboard Template", 
             options: ["slider": "Slider + Tilt + Buttons", "buttons": "Buttons Only", "minimal": "Status Only"], 
@@ -144,16 +147,16 @@ def initialize() {
         distance: null
     ]
 
-    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s, Invert: ${invertPosition}"
+    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s (Hubitat logic: 100=Open, 0=Closed)"
 }
 
 /* --------------------------------------------------
-POSITION INVERSION HELPER
+POSITION INVERSION HELPER - NOT USED (Parent handles inversion)
 -------------------------------------------------- */
-private Integer invertIfNeeded(Integer position) {
-    if (position == null) return null
-    return invertPosition ? (100 - position) : position
-}
+// private Integer invertIfNeeded(Integer position) {
+//     if (position == null) return null
+//     return invertPosition ? (100 - position) : position
+// }
 
 /* --------------------------------------------------
 MOVEMENT TRACKING & INTERPOLATION
@@ -191,7 +194,8 @@ def startMovementTracking(String direction, Integer targetPos = null) {
     sendEvent(name: "eta", value: (estimatedDuration / 1000) as Integer)
     sendEvent(name: "switch", value: "on")
 
-    logInfo "Movement tracking: ${direction} from ${currentPos} to ${targetPos}"
+    logInfo "Movement tracking: ${direction} from ${currentPos} to ${targetPos} (${distance} units, est. ${(estimatedDuration/1000)}s)"
+
     unschedule("interpolatePosition")
     runInMillis(interpolationInterval * 1000, "interpolatePosition")
 }
@@ -204,6 +208,7 @@ def stopMovementTracking(Integer finalPosition = null) {
         finalPosition = state.movementState?.targetPosition ?: 
                         device.currentValue("level") ?: 
                         state.movementState?.startPosition ?: 0
+        logDebug "No final position provided, using fallback: ${finalPosition}"
     }
 
     state.movementState = [
@@ -242,6 +247,7 @@ def interpolatePosition() {
     def target = moveState.targetPosition as Integer
 
     if (elapsed >= duration) {
+        logInfo "Interpolation complete, finalizing position at ${target}"
         stopMovementTracking(target)
         return
     }
@@ -273,7 +279,7 @@ def updateWindowShadeState(Integer position) {
     } else {
         shadeValue = "partially open"
     }
-    
+
     def currentShade = device.currentValue("windowShade")
     if (currentShade != shadeValue) {
         sendEvent(name: "windowShade", value: shadeValue)
@@ -296,7 +302,7 @@ def close() {
 }
 
 def stop() {
-    logInfo "Stop command received"
+    logInfo "Stop command received - current level: ${device.currentValue('level') ?: 'unknown'}"
     stopMovementTracking()
     parent?.sendChildStop(device.deviceNetworkId)
 }
@@ -310,18 +316,20 @@ def setPosition(position) {
     def hubitatPos = (position as Integer)
     hubitatPos = Math.min(100, Math.max(0, hubitatPos)) as Integer
     
-    // INVERT: Convert Hubitat position to Bridge position before sending
-    def bridgePos = invertIfNeeded(hubitatPos)
+    // NOTE: Parent driver handles inversion to Bridge protocol. Send Hubitat position directly.
+    // Bridge expects: 0=Open, 100=Closed. Parent converts: Hubitat 100 → Bridge 0
     
     def currentPos = (device.currentValue("level") ?: 0) as Integer
     def direction = (hubitatPos > currentPos) ? "open" : "close"
 
-    logInfo "Setting position to ${hubitatPos} (Bridge: ${bridgePos}, Invert: ${invertPosition})"
+    logInfo "Setting position to ${hubitatPos} (Hubitat logic, Parent handles Bridge conversion)"
     startMovementTracking(direction, hubitatPos)
-    parent?.sendChildCommand(device.deviceNetworkId, bridgePos)
+    // Send Hubitat position - Parent will invert if needed before sending to Bridge
+    parent?.sendChildCommand(device.deviceNetworkId, hubitatPos)
 }
 
 def startPositionChange(String direction) {
+    logDebug "Starting position change: ${direction}"
     startMovementTracking(direction)
     if (direction == "open") {
         parent?.sendChildOpen(device.deviceNetworkId)
@@ -331,6 +339,7 @@ def startPositionChange(String direction) {
 }
 
 def stopPositionChange() {
+    logDebug "Stopping position change"
     stopMovementTracking()
     parent?.sendChildStop(device.deviceNetworkId)
 }
@@ -340,20 +349,23 @@ def presetPosition() {
 }
 
 /* --------------------------------------------------
-ANGLE COMMANDS
+ANGLE COMMANDS - NO INVERSION NEEDED
 -------------------------------------------------- */
 def setAngle(angle) {
+    // Angle/Tilt values (0-180) are passed through unchanged - no inversion needed
     def ang = (angle as Integer)
     ang = Math.min(180, Math.max(0, ang)) as Integer
-    logDebug "Setting angle to ${ang}"
+    logDebug "Setting angle to ${ang}° (no inversion - angle range is 0-180)"
     parent?.sendChildAngleCommand(device.deviceNetworkId, ang)
 }
 
 def angleOpen() {
+    logDebug "Setting angle to open (180°)"
     setAngle(180)
 }
 
 def angleClose() {
+    logDebug "Setting angle to close (0°)"
     setAngle(0)
 }
 
@@ -364,24 +376,27 @@ def updateStatus(Map data) {
     def reportedPos = data.currentPosition ?: data.position ?: data.level
     
     if (reportedPos != null) {
-        // INVERT: Convert Bridge position to Hubitat position
-        def hubitatLevel = invertIfNeeded(reportedPos as Integer)
-        logDebug "Status update: Bridge=${reportedPos} → Hubitat=${hubitatLevel} (Invert: ${invertPosition})"
+        // NOTE: Parent driver already inverted Bridge position to Hubitat logic.
+        // Use value as-is: Hubitat expects 100=Open, 0=Closed
+        def hubitatLevel = reportedPos as Integer
+        logDebug "Status update: Received Hubitat position=${hubitatLevel} (Parent handled inversion)"
         stopMovementTracking(hubitatLevel)
     } else {
+        logDebug "Status update without position field, keys: ${data.keySet()}"
         stopMovementTracking(null)
     }
 
+    // Angle/Tilt - NO INVERSION NEEDED (0-180 range is universal)
     if (data.currentAngle != null) {
         sendEvent(name: "angle", value: data.currentAngle as Integer)
         sendEvent(name: "tilt", value: data.currentAngle as Integer)
     }
     
-    // FIX: Explicit type casting for battery calculation
+    // FIX: Battery calculation with proper type casting for DD7002B
     if (data.batteryLevel != null) {
         def batteryLevelVal = data.batteryLevel as Integer
         sendEvent(name: "batteryLevel", value: batteryLevelVal)
-        // FIX: Use 150.0 for floating-point division and proper casting
+        // Use 150.0 for floating-point division, explicit casts to avoid Groovy ambiguity
         def batteryPercent = Math.min(100, Math.max(0, ((((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer)))
         sendEvent(name: "battery", value: batteryPercent)
     }
