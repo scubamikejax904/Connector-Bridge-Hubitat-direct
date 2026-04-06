@@ -1,11 +1,12 @@
 /**
  * Connector WLAN Integration - Full Production (New Protocol Only)
- * DD7006 Compatible - Protocol v1.03+
+ * DD7006 & DD7002B Compatible - Protocol v1.03+
  * Complete implementation of Connector WLAN Integration Protocol v1.03
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Test v24 - Battery Calculation Fix
+ * Test v29 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v29 to
+ * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -36,6 +37,9 @@ metadata {
         input name: "autoRefreshInterval", type: "number", title: "Auto Refresh Interval (minutes, 0=disabled)", defaultValue: 0, required: true
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
         input name: "bridgePort", type: "number", title: "Bridge UDP Port", defaultValue: 32100, required: true
+        // FIX: Add inversion preference for flexibility
+        input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Bridge 0=Open ↔ Hubitat 100=Open)", 
+            defaultValue: true, description: "Enable if bridge reports 0=fully open, 100=fully closed"
     }
 }
 
@@ -301,10 +305,20 @@ def listOrphanedDevices() {
 }
 
 /* --------------------------------------------------
+   POSITION INVERSION HELPER
+-------------------------------------------------- */
+private Integer invertIfNeeded(Integer position) {
+    if (position == null) return null
+    return invertPosition ? (100 - position) : position
+}
+
+/* --------------------------------------------------
    CHILD COMMANDS - Standard
 -------------------------------------------------- */
 def sendChildCommand(String mac, Integer position) {
-    queueCommand("doSendChildCommand", [mac: mac, position: position])
+    // FIX: Invert Hubitat position to Bridge convention before sending
+    def bridgePos = invertIfNeeded(position)
+    queueCommand("doSendChildCommand", [mac: mac, position: bridgePos])
 }
 
 def sendChildAngleCommand(String mac, Integer angle) {
@@ -331,7 +345,10 @@ def refreshChild(String mac) {
    CHILD COMMANDS - TDBU
 -------------------------------------------------- */
 def sendChildTDBUPosition(String mac, Integer positionTop, Integer positionBottom) {
-    queueCommand("doSendChildTDBUPosition", [mac: mac, positionTop: positionTop, positionBottom: positionBottom])
+    // FIX: Invert Hubitat positions to Bridge convention
+    def posT = invertIfNeeded(positionTop)
+    def posB = invertIfNeeded(positionBottom)
+    queueCommand("doSendChildTDBUPosition", [mac: mac, positionTop: posT, positionBottom: posB])
 }
 
 def sendChildTDBUOperation(String mac, Integer operationTop, Integer operationBottom, Boolean top, Boolean bottom) {
@@ -704,7 +721,6 @@ def handleHeartbeat(Map json) {
     }
 }
 
-// ✅ KEPT AS logInfo - Shows manual commands (open/close/stop/setPosition)
 def handleWriteDeviceAck(Map json) {
     if (json.actionResult == "AccessToken error") {
         logWarn "AccessToken error — refreshing token, pausing queue"
@@ -721,7 +737,6 @@ def handleWriteDeviceAck(Map json) {
     }
 }
 
-// ✅ CHANGED TO logDebug - Hides auto-refresh queries
 def handleReadDeviceAck(Map json) {
     logDebug "ReadDeviceAck received for ${json.mac}"
     if (json.data) {
@@ -729,7 +744,6 @@ def handleReadDeviceAck(Map json) {
     }
 }
 
-// ✅ CHANGED TO logDebug - Hides unsolicited status reports
 def handleReport(Map json) {
     logDebug "Report received for ${json.mac}"
     if (json.data) {
@@ -772,56 +786,69 @@ def updateStandardDeviceStatus(child, Map data) {
     def voltageModes = getVoltageModes()
     def wirelessModes = getWirelessModes()
 
-    def bridgePos = data.currentPosition as Integer
-    def hubitatLevel = 100 - bridgePos
+    // --- POSITION --- (Null-safe processing)
+    if (data.currentPosition != null) {
+        def bridgePos = data.currentPosition as Integer
+        def hubitatLevel = invertIfNeeded(bridgePos)
 
-    def currentLevel = child.currentValue("level")
-    if (currentLevel != hubitatLevel) {
-        child.sendEvent(name: "level", value: hubitatLevel)
+        def currentLevel = child.currentValue("level")
+        if (currentLevel != hubitatLevel) {
+            child.sendEvent(name: "level", value: hubitatLevel as Integer)
+        }
+
+        // FIX: Use Hubitat logic for shade value (100=open, 0=closed)
+        def currentShade = child.currentValue("windowShade")
+        def shadeValue = (hubitatLevel == 100) ? "open" : (hubitatLevel == 0) ? "closed" : "partially open"
+        if (currentShade != shadeValue) {
+            child.sendEvent(name: "windowShade", value: shadeValue)
+        }
     }
 
-    def currentShade = child.currentValue("windowShade")
-    def shadeValue = (hubitatLevel == 100) ? "open" : (hubitatLevel == 0) ? "closed" : "partially open"
-    if (currentShade != shadeValue) {
-        child.sendEvent(name: "windowShade", value: shadeValue)
-    }
-
+    // --- ANGLE ---
     if (data.currentAngle != null) {
         child.sendEvent(name: "angle", value: data.currentAngle as Integer)
     }
 
+    // --- BLIND TYPE ---
     if (data.type != null) {
         def blindName = blindTypes[data.type] ?: "Unknown"
         child.updateDataValue("blindType", data.type.toString())
         child.updateDataValue("blindTypeName", blindName)
     }
 
+    // --- OPERATION ---
     if (data.operation != null) {
         child.sendEvent(name: "operation", value: operationTypes[data.operation] ?: data.operation)
     }
 
+    // --- LIMIT STATE ---
     if (data.currentState != null) {
         child.sendEvent(name: "limitState", value: currentStates[data.currentState] ?: data.currentState)
     }
 
+    // --- VOLTAGE MODE ---
     if (data.voltageMode != null) {
         def voltageModeName = voltageModes[data.voltageMode] ?: "Unknown"
         child.updateDataValue("voltageMode", data.voltageMode.toString())
         child.updateDataValue("voltageModeName", voltageModeName)
     }
 
+    // --- BATTERY --- (Null-safe + DD7002B compatible)
     if (data.batteryLevel != null) {
-    def batteryLevelVal = data.batteryLevel as Integer
-    child.sendEvent(name: "batteryLevel", value: batteryLevelVal)
-    def batteryPercent = Math.min(100, Math.max(0, (((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer))
-    child.sendEvent(name: "battery", value: batteryPercent)
-}
+        def batteryLevelVal = data.batteryLevel as Integer
+        child.sendEvent(name: "batteryLevel", value: batteryLevelVal)
+        // Use 150.0 for floating-point division, explicit casts to avoid Groovy ambiguity
+        def batteryPercent = Math.min(100, Math.max(0, ((((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer)))
+        child.sendEvent(name: "battery", value: batteryPercent)
+    }
 
+    // --- CHARGING ---
     if (data.chargingState != null) {
         def isCharging = (data.chargingState == 1)
         child.sendEvent(name: "chargingState", value: isCharging ? "charging" : "not charging")
     }
 
+    // --- WIRELESS MODE ---
     if (data.wirelessMode != null) {
         def wirelessModeName = wirelessModes[data.wirelessMode] ?: "Unknown"
         child.updateDataValue("wirelessMode", data.wirelessMode.toString())
@@ -829,6 +856,7 @@ def updateStandardDeviceStatus(child, Map data) {
         child.updateDataValue("isBiDirectional", (data.wirelessMode == 1) ? "true" : "false")
     }
 
+    // --- RSSI ---
     if (data.RSSI != null) {
         child.sendEvent(name: "rssi", value: data.RSSI)
     }
@@ -838,20 +866,33 @@ def updateTDBUDeviceStatus(child, Map data) {
     def operationTypes = getOperationTypes()
     def currentStates = getCurrentStates()
 
-    def bridgePosTop = data.currentPosition_T as Integer
-    def hubitatTop = 100 - bridgePosTop
-    child.sendEvent(name: "levelTop", value: hubitatTop)
+    // --- TOP POSITION --- (Null-safe)
+    if (data.currentPosition_T != null) {
+        def bridgePosTop = data.currentPosition_T as Integer
+        def hubitatTop = invertIfNeeded(bridgePosTop)
+        child.sendEvent(name: "levelTop", value: hubitatTop as Integer)
+    }
 
-    def bridgePosBottom = data.currentPosition_B as Integer
-    def hubitatBottom = 100 - bridgePosBottom
-    child.sendEvent(name: "levelBottom", value: hubitatBottom)
+    // --- BOTTOM POSITION --- (Null-safe)
+    if (data.currentPosition_B != null) {
+        def bridgePosBottom = data.currentPosition_B as Integer
+        def hubitatBottom = invertIfNeeded(bridgePosBottom)
+        child.sendEvent(name: "levelBottom", value: hubitatBottom as Integer)
 
-    def avgPos = ((hubitatTop + hubitatBottom) / 2) as Integer
-    child.sendEvent(name: "level", value: avgPos)
+        // FIX: Use Hubitat logic for shade value based on bottom position
+        def shadeValue = (hubitatBottom == 100) ? "open" : (hubitatBottom == 0) ? "closed" : "partially open"
+        child.sendEvent(name: "windowShade", value: shadeValue)
+    }
 
-    def shadeValue = (hubitatBottom == 100) ? "open" : (hubitatBottom == 0) ? "closed" : "partially open"
-    child.sendEvent(name: "windowShade", value: shadeValue)
+    // --- AVERAGE LEVEL --- (Only if both positions available)
+    if (data.currentPosition_T != null && data.currentPosition_B != null) {
+        def hubitatTop = invertIfNeeded(data.currentPosition_T as Integer)
+        def hubitatBottom = invertIfNeeded(data.currentPosition_B as Integer)
+        def avgPos = ((hubitatTop + hubitatBottom) / 2) as Integer
+        child.sendEvent(name: "level", value: avgPos)
+    }
 
+    // --- OPERATIONS ---
     if (data.operation_T != null) {
         child.sendEvent(name: "operationTop", value: operationTypes[data.operation_T] ?: data.operation_T)
     }
@@ -859,6 +900,7 @@ def updateTDBUDeviceStatus(child, Map data) {
         child.sendEvent(name: "operationBottom", value: operationTypes[data.operation_B] ?: data.operation_B)
     }
 
+    // --- LIMIT STATES ---
     if (data.currentState_T != null) {
         child.sendEvent(name: "limitStateTop", value: currentStates[data.currentState_T] ?: data.currentState_T)
     }
@@ -866,13 +908,17 @@ def updateTDBUDeviceStatus(child, Map data) {
         child.sendEvent(name: "limitStateBottom", value: currentStates[data.currentState_B] ?: data.currentState_B)
     }
 
+    // --- BATTERY --- (Null-safe + DD7002B compatible)
     if (data.batteryLevel_T != null) {
-        child.sendEvent(name: "batteryLevelTop", value: data.batteryLevel_T)
+        def batTop = data.batteryLevel_T as Integer
+        child.sendEvent(name: "batteryLevelTop", value: batTop)
     }
     if (data.batteryLevel_B != null) {
-        child.sendEvent(name: "batteryLevelBottom", value: data.batteryLevel_B)
+        def batBottom = data.batteryLevel_B as Integer
+        child.sendEvent(name: "batteryLevelBottom", value: batBottom)
     }
 
+    // --- RSSI ---
     if (data.RSSI != null) {
         child.sendEvent(name: "rssi", value: data.RSSI)
     }
