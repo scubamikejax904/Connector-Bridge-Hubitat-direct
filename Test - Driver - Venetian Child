@@ -2,7 +2,7 @@
 Connector Venetian Child Driver - Easy Dashboard Compatible
 For: Venetian Blinds (2), Curtain Open Right (14)
 Commands: Position + Angle/Tilt
-Test v29 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion
+Test v30 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion, Interpolation stability fixes
 DD7002B & DD7006 Compatible - Fixed type coercion issues
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
 Angle/Tilt values (0-180) are passed through unchanged - no inversion needed.
@@ -164,6 +164,9 @@ MOVEMENT TRACKING & INTERPOLATION
 def startMovementTracking(String direction, Integer targetPos = null) {
     if (!interpolationEnabled) return
     
+    // FIX: Kill any existing interpolation to prevent overlap/jumping
+    stopMovementTracking()
+    
     // FIX: Explicitly cast currentValue to Integer to avoid Groovy ambiguity on DD7002B
     def currentPos = (device.currentValue("level") ?: 0) as Integer
     // Hubitat logic: open=100, close=0
@@ -204,10 +207,12 @@ def stopMovementTracking(Integer finalPosition = null) {
     unschedule("interpolatePosition")
     def wasMoving = state.movementState?.isMoving ?: false
 
+    // FIX: Prioritize current level over target position when finalPosition is null
+    // This prevents snapping to target when Bridge sends "Stop" without position
     if (finalPosition == null) {
-        finalPosition = state.movementState?.targetPosition ?: 
-                        device.currentValue("level") ?: 
-                        state.movementState?.startPosition ?: 0
+        finalPosition = device.currentValue("level") ?: 
+                        state.movementState?.startPosition ?: 
+                        state.movementState?.targetPosition ?: 0
         logDebug "No final position provided, using fallback: ${finalPosition}"
     }
 
@@ -375,12 +380,20 @@ EXTERNAL STATUS UPDATE HANDLER
 def updateStatus(Map data) {
     def reportedPos = data.currentPosition ?: data.position ?: data.level
     
+    // FIX: Detect Stop operation or Limit state even if position is missing
+    def isStopping = (data.operation == 2)  // 2 = Stop per protocol
+    def isLimited = (data.currentState != null && data.currentState != 0)  // 0 = No limits
+
     if (reportedPos != null) {
         // NOTE: Parent driver already inverted Bridge position to Hubitat logic.
         // Use value as-is: Hubitat expects 100=Open, 0=Closed
         def hubitatLevel = reportedPos as Integer
         logDebug "Status update: Received Hubitat position=${hubitatLevel} (Parent handled inversion)"
         stopMovementTracking(hubitatLevel)
+    } else if (isStopping || isLimited) {
+        // FIX: Bridge signaled stop/limit but didn't send position - use current level
+        logDebug "Status update: Stop/Limit detected without position, using current level"
+        stopMovementTracking(null)  // Will use device.currentValue("level") as fallback
     } else {
         logDebug "Status update without position field, keys: ${data.keySet()}"
         stopMovementTracking(null)
