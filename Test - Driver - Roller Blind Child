@@ -1,7 +1,7 @@
 /**
 Connector Roller Blind Child Driver - Position Only
 Simplified implementation for standard roller blinds (types 1,3,4,5,6,7,8,10,11,12,13)
-Test v29 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion
+Test v30- Hubitat logic only (100=Open, 0=Closed), Parent handles inversion
 DD7002B & DD7006 Compatible - Fixed type coercion issues
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
 */
@@ -19,13 +19,17 @@ metadata {
         capability "SignalStrength"
         capability "Switch"
         capability "Sensor"
+        capability "SwitchLevel"
         
-        command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100"]]
+        // Dashboard-compatible position command
+        command "setPosition", [[name: "position", type: "NUMBER", description: "Position 0-100", constraints: ["0..100"]]]
         command "startPositionChange", [[name: "direction", type: "STRING", description: "Direction: 'open' or 'close'"]]
         command "stopPositionChange"
         command "on"
         command "off"
+        //command "setLevel", [[name: "level", type: "NUMBER", description: "Level 0-100"]]
 
+        // Required attributes for Hubitat's vertical shade tile
         attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "level", "number"
         attribute "position", "number"
@@ -41,8 +45,6 @@ metadata {
         attribute "batteryLevel", "number"
         attribute "chargingState", "string"
         attribute "blindTypeName", "string"
-        attribute "voltageModeName", "string"
-        attribute "wirelessModeName", "string"
         attribute "switch", "enum", ["on", "off"]
     }
     
@@ -82,7 +84,7 @@ metadata {
     preferences {
         input name: "presetPosition", type: "number", title: "Preset Position (0-100)", defaultValue: 50, range: "0..100"
         input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
-        input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: true
+        input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: false
         input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
         // NOTE: invertPosition preference kept for backward compatibility but NOT USED - parent handles inversion
         //input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Deprecated - Parent handles inversion)", 
@@ -155,6 +157,9 @@ MOVEMENT TRACKING & INTERPOLATION
 def startMovementTracking(String direction, Integer targetPos = null) {
     if (!interpolationEnabled) return
     
+    // FIX: Kill any existing interpolation to prevent overlap/jumping
+    stopMovementTracking()
+    
     // FIX: Explicitly cast currentValue to Integer to avoid Groovy ambiguity on DD7002B
     def currentPos = (device.currentValue("level") ?: 0) as Integer
     // Hubitat logic: open=100, close=0
@@ -195,10 +200,12 @@ def stopMovementTracking(Integer finalPosition = null) {
     unschedule("interpolatePosition")
     def wasMoving = state.movementState?.isMoving ?: false
 
+    // FIX: Prioritize current level over target position when finalPosition is null
+    // This prevents snapping to target when Bridge sends "Stop" without position
     if (finalPosition == null) {
-        finalPosition = state.movementState?.targetPosition ?: 
-                        device.currentValue("level") ?: 
-                        state.movementState?.startPosition ?: 0
+        finalPosition = device.currentValue("level") ?: 
+                        state.movementState?.startPosition ?: 
+                        state.movementState?.targetPosition ?: 0
         logDebug "No final position provided, using fallback: ${finalPosition}"
     }
 
@@ -321,6 +328,12 @@ def setPosition(position) {
     // Send Hubitat position - Parent will invert if needed before sending to Bridge
     parent?.sendChildCommand(device.deviceNetworkId, hubitatPos)
 }
+def setLevel(Integer level) {
+    // Ensure level is an integer and clamp it (though setPosition does this too)
+    def pos = level as Integer
+    logInfo "setLevel called with ${pos}, forwarding to setPosition"
+    setPosition(pos)
+}
 
 def startPositionChange(String direction) {
     logDebug "Starting position change: ${direction}"
@@ -350,12 +363,19 @@ EXTERNAL STATUS UPDATE HANDLER
 def updateStatus(Map data) {
     def reportedPos = data.currentPosition ?: data.position ?: data.level
     
+    // FIX: Detect Stop operation or Limit state even if position is missing
+    def isStopping = (data.operation == 2)  // 2 = Stop per protocol
+    def isLimited = (data.currentState != null && data.currentState != 0)  // 0 = No limits
+
     if (reportedPos != null) {
-        // NOTE: Parent driver already inverted Bridge position to Hubitat logic.
-        // Use value as-is: Hubitat expects 100=Open, 0=Closed
+        // Parent already inverted Bridge position to Hubitat logic
         def hubitatLevel = reportedPos as Integer
         logDebug "Status update: Received Hubitat position=${hubitatLevel} (Parent handled inversion)"
         stopMovementTracking(hubitatLevel)
+    } else if (isStopping || isLimited) {
+        // FIX: Bridge signaled stop/limit but didn't send position - use current level
+        logDebug "Status update: Stop/Limit detected without position, using current level"
+        stopMovementTracking(null)  // Will use device.currentValue("level") as fallback
     } else {
         logDebug "Status update without position field, keys: ${data.keySet()}"
         stopMovementTracking(null)
