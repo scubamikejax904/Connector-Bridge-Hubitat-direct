@@ -13,7 +13,7 @@ metadata {
     definition(name: "Connector TDBU Child",
     namespace: "connector",
     author: "Scubamikejax904 & Manus",
-    //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-tdbu-child.groovy"
+    importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-tdbu-child.groovy"
 )
     {
         capability "WindowShade"
