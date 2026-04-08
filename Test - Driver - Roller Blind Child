@@ -28,7 +28,7 @@ metadata {
         command "on"
         command "off"
         //command "setLevel", [[name: "level", type: "NUMBER", description: "Level 0-100"]]
-
+ 
         // Required attributes for Hubitat's vertical shade tile
         attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "level", "number"
