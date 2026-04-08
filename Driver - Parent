@@ -1,19 +1,12 @@
 /**
- * Connector WLAN Integration - Full Production
- * DD7006 & DD7002B Compatible
+ * Connector WLAN Integration - Full Production (New Protocol Only)
+ * DD7006 & DD7002B Compatible - Protocol v1.03+
  * Complete implementation of Connector WLAN Integration Protocol v1.03
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * v19 - 03-31-2026 (updated to v19 to match other drivers)
- * RCv18 - 03-30-2026
- * - Separate child drivers per blind type
- * - Connector Roller Blind Child (types 1,3,4,5,6,7,8,10,11,12,13)
- * - Connector Venetian Child (types 2,14 - supports angle)
- * - Connector TDBU Child (type 9 - top/bottom control)
- * - Position inversion: Bridge 0=Open ↔ Hubitat 100=Open
- * - AccessToken always 32 hex chars (both bridge types)
- * - bridgeKey used AS-IS (16 bytes with hyphens)
+ * v30 - 04-08-2026 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
+ * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
  */
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
@@ -25,14 +18,16 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/main/Driver%20-%20Parent"
-            )
+               importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-wlan-integration-parent.groovy"
+              )
     {
         capability "Initialize"
         capability "Refresh"
         command "discoverDevices"
         command "getBridgeStatus"
         command "logBridgeInfo"
+        command "listOrphanedDevices"
+        command "removeUnusedDevices"
     }
 
     preferences {
@@ -42,6 +37,9 @@ metadata {
         input name: "autoRefreshInterval", type: "number", title: "Auto Refresh Interval (minutes, 0=disabled)", defaultValue: 0, required: true
         input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: true
         input name: "bridgePort", type: "number", title: "Bridge UDP Port", defaultValue: 32100, required: true
+        // FIX: Add inversion preference for flexibility
+        input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Bridge 0=Open ↔ Hubitat 100=Open)", 
+            defaultValue: true, description: "Enable if bridge reports 0=fully open, 100=fully closed"
     }
 }
 
@@ -70,13 +68,12 @@ def getBlindTypes() {
 }
 
 def getBlindTypeCategory(Integer blindType) {
-    // Returns child driver category based on blind type
     if (blindType == 9) {
         return "tdbu"
     } else if (blindType in [2, 14]) {
         return "venetian"
     } else {
-        return "roller" // Default for all other types
+        return "roller"
     }
 }
 
@@ -122,15 +119,15 @@ def installed() { initialize() }
 def updated() { unschedule(); initialize() }
 
 def initialize() {
-    logInfo "Initializing Connector WLAN Integration..."
+    logInfo "Initializing Connector WLAN Integration (New Protocol)..."
     state.token = null
     state.tokenTimestamp = null
     state.commandQueue = []
-    state.detectedHubType = null
     state.pendingMsgIDs = []
     state.bridgeInfo = [:]
     state.deviceInfo = [:]
     state.queuePaused = false
+    state.orphanedDevices = []
 
     runIn(3, "discoverDevices")
 
@@ -145,6 +142,8 @@ def initialize() {
         schedule("0 */${autoRefreshInterval} * * * ?", "refresh")
         logInfo "Auto-refresh enabled every ${autoRefreshInterval} minutes."
     }
+    
+    sendEvent(name: "orphanedDevices", value: 0)
 }
 
 /* --------------------------------------------------
@@ -172,24 +171,10 @@ def logBridgeInfo() {
     logInfo "MAC: ${info.mac ?: 'Unknown'}"
     logInfo "Device Type: ${deviceTypes[info.deviceType] ?: info.deviceType}"
     logInfo "Protocol Version: ${info.protocolVersion ?: 'Unknown'}"
-    logInfo "Hub Type: ${state.detectedHubType ?: 'Unknown'}"
     logInfo "Current State: ${bridgeStates[info.currentState] ?: info.currentState}"
     logInfo "Number of Devices: ${info.numberOfDevices ?: 0}"
     logInfo "RSSI: ${info.RSSI ?: 'Unknown'}"
     logInfo "=========================="
-}
-
-/* --------------------------------------------------
-   HUB TYPE DETECTION
--------------------------------------------------- */
-def detectHubType(Map json) {
-    def protocol = json.ProtocolVersion ?: "unknown"
-    if (protocol.startsWith("0.")) {
-        state.detectedHubType = "DD7002B or DD7006"
-    } else {
-        state.detectedHubType = "DD7006 (newer protocol)"
-    }
-    logInfo "Auto-detected hub type: ${state.detectedHubType} (Protocol: ${protocol})"
 }
 
 /* --------------------------------------------------
@@ -208,9 +193,6 @@ def createChild(Map deviceData) {
 
     def deviceTypeName = deviceTypes[deviceType] ?: "Unknown Device"
     def isTDBU = (deviceType == "10000001")
-    
-    // Select child driver based on bridge deviceType (TDBU vs non-TDBU)
-    // Blind type (1,2,6,9,14 etc.) will be known after first status report
     def childDriverName = isTDBU ? "Connector TDBU Child" : "Connector Roller Blind Child"
 
     addChildDevice("connector", childDriverName, mac, [
@@ -225,8 +207,6 @@ def createChild(Map deviceData) {
 }
 
 def upgradeChildDriver(String mac, Integer blindType) {
-    // Called when we learn the actual blind type from status report
-    // Recreates child with correct driver if needed
     def child = getChildDevice(mac)
     if (!child) return
     
@@ -236,11 +216,8 @@ def upgradeChildDriver(String mac, Integer blindType) {
     
     if (currentDriver != correctDriver) {
         logInfo "Upgrading ${mac} from ${currentDriver} to ${correctDriver} (blind type ${blindType})"
-        
-        // Store settings
         def label = child.getLabel()
         
-        // Delete old child
         try {
             deleteChildDevice(mac)
         } catch (Exception e) {
@@ -248,7 +225,6 @@ def upgradeChildDriver(String mac, Integer blindType) {
             return
         }
         
-        // Create new child with correct driver
         addChildDevice("connector", correctDriver, mac, [
             label: label,
             isComponent: false
@@ -263,24 +239,86 @@ def upgradeChildDriver(String mac, Integer blindType) {
     }
 }
 
-def cleanupMissingChildren(List discoveredMacs) {
+def trackOrphanedChildren(List discoveredMacs) {
+    def orphaned = []
+    
     getChildDevices().each { child ->
         if (!discoveredMacs.contains(child.deviceNetworkId)) {
-            logWarn "Device ${child.deviceNetworkId} no longer reported by bridge, deleting"
+            logWarn "Device ${child.deviceNetworkId} not reported by bridge (orphaned)"
+            orphaned << child.deviceNetworkId
+        }
+    }
+    
+    state.orphanedDevices = orphaned
+    sendEvent(name: "orphanedDevices", value: orphaned.size())
+    
+    if (orphaned.size() > 0) {
+        logWarn "Found ${orphaned.size()} orphaned device(s). Run 'removeUnusedDevices' to delete them."
+    }
+    
+    return orphaned
+}
+
+def removeUnusedDevices() {
+    logInfo "Starting manual cleanup of orphaned devices..."
+    def orphaned = state.orphanedDevices ?: []
+    
+    if (orphaned.isEmpty()) {
+        logInfo "No orphaned devices found. Nothing to remove."
+        return
+    }
+    
+    orphaned.each { mac ->
+        def child = getChildDevice(mac)
+        if (child) {
+            logWarn "Deleting orphaned device: ${mac} (${child.getLabel()})"
             try {
-                deleteChildDevice(child.deviceNetworkId)
+                deleteChildDevice(mac)
+                logInfo "✓ Successfully deleted ${mac}"
             } catch (Exception e) {
-                logError "Failed to delete child ${child.deviceNetworkId}: ${e.message}"
+                logError "✗ Failed to delete ${mac}: ${e.message}"
             }
         }
     }
+    
+    state.orphanedDevices = []
+    sendEvent(name: "orphanedDevices", value: 0)
+    logInfo "Cleanup complete. Removed ${orphaned.size()} device(s)."
+}
+
+def listOrphanedDevices() {
+    def orphaned = state.orphanedDevices ?: []
+    
+    if (orphaned.isEmpty()) {
+        logInfo "✓ No orphaned devices found. All child devices match bridge."
+        return
+    }
+    
+    logWarn "=== Orphaned Devices (not in bridge) ==="
+    orphaned.each { mac ->
+        def child = getChildDevice(mac)
+        def label = child?.getLabel() ?: "Unknown"
+        logWarn "• ${mac} - ${label}"
+    }
+    logWarn "========================================="
+    logWarn "Run 'removeUnusedDevices' to delete these ${orphaned.size()} device(s)"
+}
+
+/* --------------------------------------------------
+   POSITION INVERSION HELPER
+-------------------------------------------------- */
+private Integer invertIfNeeded(Integer position) {
+    if (position == null) return null
+    return invertPosition ? (100 - position) : position
 }
 
 /* --------------------------------------------------
    CHILD COMMANDS - Standard
 -------------------------------------------------- */
 def sendChildCommand(String mac, Integer position) {
-    queueCommand("doSendChildCommand", [mac: mac, position: position])
+    // FIX: Invert Hubitat position to Bridge convention before sending
+    def bridgePos = invertIfNeeded(position)
+    queueCommand("doSendChildCommand", [mac: mac, position: bridgePos])
 }
 
 def sendChildAngleCommand(String mac, Integer angle) {
@@ -307,7 +345,10 @@ def refreshChild(String mac) {
    CHILD COMMANDS - TDBU
 -------------------------------------------------- */
 def sendChildTDBUPosition(String mac, Integer positionTop, Integer positionBottom) {
-    queueCommand("doSendChildTDBUPosition", [mac: mac, positionTop: positionTop, positionBottom: positionBottom])
+    // FIX: Invert Hubitat positions to Bridge convention
+    def posT = invertIfNeeded(positionTop)
+    def posB = invertIfNeeded(positionBottom)
+    queueCommand("doSendChildTDBUPosition", [mac: mac, positionTop: posT, positionBottom: posB])
 }
 
 def sendChildTDBUOperation(String mac, Integer operationTop, Integer operationBottom, Boolean top, Boolean bottom) {
@@ -546,8 +587,6 @@ def generateAccessToken(token) {
     }
 
     try {
-        // DO NOT remove hyphens - KEY must be exactly 16 bytes (including hyphens)
-        // Per API spec v1.03 page 4: KEY is 16-byte length string
         SecretKeySpec skeySpec = new SecretKeySpec(bridgeKey.getBytes("UTF-8"), "AES")
         Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, skeySpec)
@@ -557,7 +596,6 @@ def generateAccessToken(token) {
         String hex = HexUtils.byteArrayToHexString(encrypted).toUpperCase()
 
         // AccessToken must always be 32 hex chars (16 bytes) per API spec v1.03
-        // Both DD7006 and DD7002B require this format
         String finalAccessToken = hex.substring(0, 32)
         logDebug "Generated AccessToken: ${finalAccessToken}"
         return finalAccessToken
@@ -647,7 +685,6 @@ def handleGetDeviceListAck(Map json) {
         protocolVersion: json.ProtocolVersion
     ]
 
-    detectHubType(json)
     processCommandQueue()
 
     def discoveredMacs = []
@@ -657,7 +694,8 @@ def handleGetDeviceListAck(Map json) {
             discoveredMacs << device.mac
         }
     }
-    cleanupMissingChildren(discoveredMacs)
+    
+    trackOrphanedChildren(discoveredMacs)
 }
 
 def handleHeartbeat(Map json) {
@@ -700,14 +738,14 @@ def handleWriteDeviceAck(Map json) {
 }
 
 def handleReadDeviceAck(Map json) {
-    logInfo "ReadDeviceAck received for ${json.mac}"
+    logDebug "ReadDeviceAck received for ${json.mac}"
     if (json.data) {
         updateDeviceStatus(json.mac, json.data)
     }
 }
 
 def handleReport(Map json) {
-    logInfo "Report received for ${json.mac}"
+    logDebug "Report received for ${json.mac}"
     if (json.data) {
         updateDeviceStatus(json.mac, json.data)
     }
@@ -727,7 +765,6 @@ def updateDeviceStatus(String mac, Map data) {
     deviceInfo[mac] = data
     state.deviceInfo = deviceInfo
 
-    // Check if we need to upgrade child driver based on blind type
     if (data.type != null) {
         upgradeChildDriver(mac, data.type as Integer)
     }
@@ -749,57 +786,69 @@ def updateStandardDeviceStatus(child, Map data) {
     def voltageModes = getVoltageModes()
     def wirelessModes = getWirelessModes()
 
-    // INVERT: Bridge Position (0=Open, 100=Closed) → Hubitat Level (0=Closed, 100=Open)
-    def bridgePos = data.currentPosition as Integer
-    def hubitatLevel = 100 - bridgePos
+    // --- POSITION --- (Null-safe processing)
+    if (data.currentPosition != null) {
+        def bridgePos = data.currentPosition as Integer
+        def hubitatLevel = invertIfNeeded(bridgePos)
 
-    def currentLevel = child.currentValue("level")
-    if (currentLevel != hubitatLevel) {
-        child.sendEvent(name: "level", value: hubitatLevel)
+        def currentLevel = child.currentValue("level")
+        if (currentLevel != hubitatLevel) {
+            child.sendEvent(name: "level", value: hubitatLevel as Integer)
+        }
+
+        // FIX: Use Hubitat logic for shade value (100=open, 0=closed)
+        def currentShade = child.currentValue("windowShade")
+        def shadeValue = (hubitatLevel == 100) ? "open" : (hubitatLevel == 0) ? "closed" : "partially open"
+        if (currentShade != shadeValue) {
+            child.sendEvent(name: "windowShade", value: shadeValue)
+        }
     }
 
-    // Use Hubitat logic: 100=Open, 0=Closed
-    def currentShade = child.currentValue("windowShade")
-    def shadeValue = (hubitatLevel == 100) ? "open" : (hubitatLevel == 0) ? "closed" : "partially open"
-    if (currentShade != shadeValue) {
-        child.sendEvent(name: "windowShade", value: shadeValue)
-    }
-
+    // --- ANGLE ---
     if (data.currentAngle != null) {
         child.sendEvent(name: "angle", value: data.currentAngle as Integer)
     }
 
+    // --- BLIND TYPE ---
     if (data.type != null) {
         def blindName = blindTypes[data.type] ?: "Unknown"
         child.updateDataValue("blindType", data.type.toString())
         child.updateDataValue("blindTypeName", blindName)
     }
 
+    // --- OPERATION ---
     if (data.operation != null) {
         child.sendEvent(name: "operation", value: operationTypes[data.operation] ?: data.operation)
     }
 
+    // --- LIMIT STATE ---
     if (data.currentState != null) {
         child.sendEvent(name: "limitState", value: currentStates[data.currentState] ?: data.currentState)
     }
 
+    // --- VOLTAGE MODE ---
     if (data.voltageMode != null) {
         def voltageModeName = voltageModes[data.voltageMode] ?: "Unknown"
         child.updateDataValue("voltageMode", data.voltageMode.toString())
         child.updateDataValue("voltageModeName", voltageModeName)
     }
 
+    // --- BATTERY --- (Null-safe + DD7002B compatible)
     if (data.batteryLevel != null) {
-        child.sendEvent(name: "batteryLevel", value: data.batteryLevel)
-        def batteryPercent = Math.min(100, Math.max(0, ((data.batteryLevel - 700) / 150 * 100) as Integer))
+        def batteryLevelVal = data.batteryLevel as Integer
+        child.sendEvent(name: "batteryLevel", value: batteryLevelVal)
+        // Use 150.0 for floating-point division, explicit casts to avoid Groovy ambiguity
+        def batteryPercent = Math.min(100, Math.max(0, ((((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer)))
         child.sendEvent(name: "battery", value: batteryPercent)
     }
 
+    // --- CHARGING ---
     if (data.chargingState != null) {
         def isCharging = (data.chargingState == 1)
         child.sendEvent(name: "chargingState", value: isCharging ? "charging" : "not charging")
     }
 
+    // --- WIRELESS MODE ---
     if (data.wirelessMode != null) {
         def wirelessModeName = wirelessModes[data.wirelessMode] ?: "Unknown"
         child.updateDataValue("wirelessMode", data.wirelessMode.toString())
@@ -807,6 +856,7 @@ def updateStandardDeviceStatus(child, Map data) {
         child.updateDataValue("isBiDirectional", (data.wirelessMode == 1) ? "true" : "false")
     }
 
+    // --- RSSI ---
     if (data.RSSI != null) {
         child.sendEvent(name: "rssi", value: data.RSSI)
     }
@@ -816,22 +866,33 @@ def updateTDBUDeviceStatus(child, Map data) {
     def operationTypes = getOperationTypes()
     def currentStates = getCurrentStates()
 
-    // INVERT: Bridge Position (0=Open, 100=Closed) → Hubitat Level (0=Closed, 100=Open)
-    def bridgePosTop = data.currentPosition_T as Integer
-    def hubitatTop = 100 - bridgePosTop
-    child.sendEvent(name: "levelTop", value: hubitatTop)
+    // --- TOP POSITION --- (Null-safe)
+    if (data.currentPosition_T != null) {
+        def bridgePosTop = data.currentPosition_T as Integer
+        def hubitatTop = invertIfNeeded(bridgePosTop)
+        child.sendEvent(name: "levelTop", value: hubitatTop as Integer)
+    }
 
-    def bridgePosBottom = data.currentPosition_B as Integer
-    def hubitatBottom = 100 - bridgePosBottom
-    child.sendEvent(name: "levelBottom", value: hubitatBottom)
+    // --- BOTTOM POSITION --- (Null-safe)
+    if (data.currentPosition_B != null) {
+        def bridgePosBottom = data.currentPosition_B as Integer
+        def hubitatBottom = invertIfNeeded(bridgePosBottom)
+        child.sendEvent(name: "levelBottom", value: hubitatBottom as Integer)
 
-    def avgPos = ((hubitatTop + hubitatBottom) / 2) as Integer
-    child.sendEvent(name: "level", value: avgPos)
+        // FIX: Use Hubitat logic for shade value based on bottom position
+        def shadeValue = (hubitatBottom == 100) ? "open" : (hubitatBottom == 0) ? "closed" : "partially open"
+        child.sendEvent(name: "windowShade", value: shadeValue)
+    }
 
-    // Use Hubitat logic: 100=Open, 0=Closed (based on bottom position)
-    def shadeValue = (hubitatBottom == 100) ? "open" : (hubitatBottom == 0) ? "closed" : "partially open"
-    child.sendEvent(name: "windowShade", value: shadeValue)
+    // --- AVERAGE LEVEL --- (Only if both positions available)
+    if (data.currentPosition_T != null && data.currentPosition_B != null) {
+        def hubitatTop = invertIfNeeded(data.currentPosition_T as Integer)
+        def hubitatBottom = invertIfNeeded(data.currentPosition_B as Integer)
+        def avgPos = ((hubitatTop + hubitatBottom) / 2) as Integer
+        child.sendEvent(name: "level", value: avgPos)
+    }
 
+    // --- OPERATIONS ---
     if (data.operation_T != null) {
         child.sendEvent(name: "operationTop", value: operationTypes[data.operation_T] ?: data.operation_T)
     }
@@ -839,6 +900,7 @@ def updateTDBUDeviceStatus(child, Map data) {
         child.sendEvent(name: "operationBottom", value: operationTypes[data.operation_B] ?: data.operation_B)
     }
 
+    // --- LIMIT STATES ---
     if (data.currentState_T != null) {
         child.sendEvent(name: "limitStateTop", value: currentStates[data.currentState_T] ?: data.currentState_T)
     }
@@ -846,13 +908,17 @@ def updateTDBUDeviceStatus(child, Map data) {
         child.sendEvent(name: "limitStateBottom", value: currentStates[data.currentState_B] ?: data.currentState_B)
     }
 
+    // --- BATTERY --- (Null-safe + DD7002B compatible)
     if (data.batteryLevel_T != null) {
-        child.sendEvent(name: "batteryLevelTop", value: data.batteryLevel_T)
+        def batTop = data.batteryLevel_T as Integer
+        child.sendEvent(name: "batteryLevelTop", value: batTop)
     }
     if (data.batteryLevel_B != null) {
-        child.sendEvent(name: "batteryLevelBottom", value: data.batteryLevel_B)
+        def batBottom = data.batteryLevel_B as Integer
+        child.sendEvent(name: "batteryLevelBottom", value: batBottom)
     }
 
+    // --- RSSI ---
     if (data.RSSI != null) {
         child.sendEvent(name: "rssi", value: data.RSSI)
     }
