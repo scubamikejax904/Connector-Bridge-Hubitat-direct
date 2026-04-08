@@ -5,7 +5,7 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * v30 - 04-08-2026 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
+ * Release v30 - 04-08-2026 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
  * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
  */
 
@@ -19,7 +19,7 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-wlan-integration-parent.groovy"
+               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
               )
     {
         capability "Initialize"
