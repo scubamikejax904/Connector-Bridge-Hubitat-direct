@@ -1,8 +1,10 @@
 # Hubitat Connector WLAN Integration Driver
 
+**Please note if your Motors are Uni-directional you will not get position data, I am unsure if Device Interpolation will work as intended for you**
+
 ## Overview
 
-This is an unofficial, community-developed Hubitat Elevation driver for controlling motorized window coverings that use the "Connector" brand Wi-Fi bridge (DD7006 compatible). It allows for direct integration of your blinds and shades into your Hubitat environment, enabling you to control them via the Hubitat UI, dashboards, and automation rules.
+This is an unofficial, community-developed Hubitat Elevation driver for controlling motorized window coverings that use the "Connector" brand Wi-Fi bridge (DD7006 or DD7002B). It allows for direct integration of your blinds and shades into your Hubitat environment, enabling you to control them via the Hubitat UI, dashboards, and automation rules. **all locally no Internet connection required**
 
 This driver was developed through a collaborative debugging process and incorporates a robust token refresh and command queuing system to ensure reliable communication with the bridge and devices, correcting for several undocumented quirks in the device's API.
 
@@ -59,7 +61,7 @@ You will need two pieces of information from your setup before installing the dr
 
 1.  Click on **Devices** in the left-hand menu.
 2.  Click the **+ Add Virtual Device** button in the top-right corner.
-3.  In the `Device Name` field, give your bridge a logical name (e.g., "Blinds Bridge").
+3.  In the `Device Name` field, give your bridge a name (Logical examples "Blinds Bridge", "Porch Blinds"etc.).
 4.  In the `Type` dropdown menu, scroll all the way down to the "User" section at the bottom and select **Connector WLAN Integration (Full)**.
 5.  Click the **Save Device** button.
 
@@ -80,14 +82,15 @@ This is the final and most important step.
 2.  Click the **Initialize** button.
 3.  Wait about 10-15 seconds. The driver will communicate with the bridge, acquire a token, and automatically create child devices for every blind it finds.
 4.  Refresh the page. You should now see all of your blinds listed as child devices at the bottom of the page.
+5.  On Each Child device click Refresh so that it pulls device type, 
 
-### Step 6: Configure the Child Device (repeat on every child) 
-1.  Refresh child device so that it pulls device type, Verify that the driver is the correct one (you may need to manually change the driver)
-    If you need to change it do so and click save and exit.  refresh your browser and open the child device (it should now only have commands that work with your device (**Hubitat's WidnowShade capability includes Tilt angle which isn't used on Roller Shades/Roller Blinds, but there is no way to remove it from the UI so ignore it)**
-2.  Verify your motors position settings (all the ones I have show/react with 0=Fully open & 100=Fully closed)  **Hubitat expects 100=Fully Open and 0=Fully Closed)  this toggle is on by default to invert the numbers that are reported in Hubitat.  Only change this if your devices are different**
+    ### Step 6: Configure the Child Device (repeat on every child) on the device info tab
+1.  Rename the device label to give it an easy common name
+2.  Select the correct child driver for your device (unfortunately I haven't found a way to auto do this as the device has to be setup to       get the device type from the bridge.
+3.  click save and exit.  refresh your browser and open the child device (it should now only have commands that work with your device (**Hubitat's WidnowShade capability includes Tilt angle which isn't used on Roller Shades/Roller Blinds, but there is no way to remove it from the UI so ignore it)**
 
 
-**Optional not required**
+**Optional not required** on the preferences tab
 
 1.  In the "Preferences" section, enter the following:
     -   **Full Travel Time:** Enter time in seconds
@@ -106,7 +109,7 @@ This is the final and most important step.
 Your installation is now complete!
 
 -   You can control each blind individually from its own device page.
--   You can add these child devices to your Hubitat Dashboards using the "Shade" template.
+-   You can add these child devices to your Hubitat Dashboards using the "Shade" template or the "LevelVertical" template, I am unsure how TDBU blinds or the Venetian blinds work on a dashboard as I only have Roller shades to test with.
 -   You can use these devices in your automations with Rule Machine, Motion Lighting, etc., to open/close blinds based on time of day, motion, or other events.
 
 ## Troubleshooting
@@ -122,6 +125,3 @@ Your installation is now complete!
 
 -   **Device status shows "unknown":**
     -   This should no longer happen with the latest version of the driver. If it does, ensure you have the correct code installed. Click `Refresh` on the parent device page to get the latest status.
-   
-      
-      
