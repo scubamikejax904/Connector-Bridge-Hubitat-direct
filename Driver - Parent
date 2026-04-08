@@ -8,6 +8,7 @@
  * v30 - 04-08-2026 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
  * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
  */
+
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 import hubitat.helper.HexUtils
