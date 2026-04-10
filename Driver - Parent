@@ -5,10 +5,9 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Release v30 - 04-08-2026 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
+ * Test v29 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v29 to
  * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
  */
-
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 import hubitat.helper.HexUtils
@@ -19,7 +18,7 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
+               //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-wlan-integration-parent.groovy"
               )
     {
         capability "Initialize"
@@ -168,13 +167,18 @@ def logBridgeInfo() {
     def info = state.bridgeInfo ?: [:]
     def deviceTypes = getDeviceTypes()
     def bridgeStates = getBridgeStates()
+    
     logInfo "=== Bridge Information ==="
     logInfo "MAC: ${info.mac ?: 'Unknown'}"
     logInfo "Device Type: ${deviceTypes[info.deviceType] ?: info.deviceType}"
     logInfo "Protocol Version: ${info.protocolVersion ?: 'Unknown'}"
-    logInfo "Current State: ${bridgeStates[info.currentState] ?: info.currentState}"
-    logInfo "Number of Devices: ${info.numberOfDevices ?: 0}"
-    logInfo "RSSI: ${info.RSSI ?: 'Unknown'}"
+    logInfo "Hub Type: ${state.detectedHubType ?: 'Unknown'}"
+    
+    // FIX: Handle null values gracefully until first Heartbeat arrives
+    logInfo "Current State: ${bridgeStates[info.currentState] ?: 'Unknown (Awaiting Heartbeat)'}"
+    logInfo "Number of Devices: ${info.numberOfDevices != null ? info.numberOfDevices : 'Awaiting Heartbeat'}"
+    logInfo "RSSI: ${info.RSSI != null ? info.RSSI : 'Awaiting Heartbeat'}"
+    
     logInfo "=========================="
 }
 
