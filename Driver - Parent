@@ -5,7 +5,7 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Test v29 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v29 to
+ * Test v30.1 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
  * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
  */
 import groovy.json.JsonSlurper
