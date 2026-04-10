@@ -2,16 +2,15 @@
 Connector Roller Blind Child Driver - Position Only
 Simplified implementation for standard roller blinds (types 1,3,4,5,6,7,8,10,11,12,13)
 
-Release v30 04-08-2026- Hubitat logic only (100=Open, 0=Closed), Parent handles inversion
+Release v30.1 04-10-2026 - improved StopeMovementTracking to assume on Unidirectional motors that when they stop it's at the target level (they don't report position so it's all a guess)
 
-DD7002B & DD7006 Compatible - Fixed type coercion issues
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
 */
 metadata {
     definition(name: "Connector Roller Blind Child",
     namespace: "connector",
     author: "Scubamikejax904 & Manus",
-    importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Child%20-%20Roller%20Blind"
+    //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-roller-blind-child.groovy"
               )
     {
         capability "WindowShade"
@@ -64,3 +63,400 @@ metadata {
             state "open", label: "Open", action: "open", icon: "st.window-shade.open", backgroundColor: "#44D62C"
             state "closed", label: "Closed", action: "close", icon: "st.window-shade.closed", backgroundColor: "#FF0000"
             state "partially open", label: "Partial", action: "setPosition", icon: "st.window-shade.partial", backgroundColor: "#FFFF00"
+            state "unknown", label: "Unknown", icon: "st.window-shade.unknown", backgroundColor: "#CCCCCC"
+        }
+        
+        standardTile("refresh", "device.switch", inactiveLabel: false, decoration: "flat", width: 2, height: 1) {
+            state "default", label: "", action: "refresh.refresh", icon: "st.secondary.refresh"
+        }
+        
+        valueTile("battery", "device.battery", inactiveLabel: false, decoration: "flat") {
+            state "default", label: '${currentValue}% battery'
+        }
+        
+        valueTile("rssi", "device.rssi", inactiveLabel: false, decoration: "flat") {
+            state "default", label: 'RSSI: ${currentValue}'
+        }
+        
+        main(["level", "windowShade"])
+        details(["level", "windowShade", "battery", "rssi", "refresh"])
+    }
+    
+    preferences {
+        input name: "presetPosition", type: "number", title: "Preset Position (0-100)", defaultValue: 50, range: "0..100"
+        input name: "fullTravelTime", type: "number", title: "Full Travel Time (seconds for 0↔100)", defaultValue: 30, range: "5..300"
+        input name: "interpolationEnabled", type: "bool", title: "Enable Position Interpolation", defaultValue: false
+        input name: "interpolationInterval", type: "number", title: "Interpolation Update Interval (seconds)", defaultValue: 1, range: "1..10"
+        // NOTE: invertPosition preference kept for backward compatibility but NOT USED - parent handles inversion
+        //input name: "invertPosition", type: "bool", title: "⚙️ Invert Position (Deprecated - Parent handles inversion)", 
+            //defaultValue: true, description: "This setting is now handled by the Parent driver. Child uses Hubitat logic (100=Open, 0=Closed)."
+        input name: "debugLogging", type: "bool", title: "Enable Debug Logging", defaultValue: false
+        input name: "easyDashboardTemplate", type: "enum", title: "Easy Dashboard Template", 
+            options: ["slider": "Slider + Buttons", "buttons": "Buttons Only", "minimal": "Minimal"], 
+            defaultValue: "slider"
+    }
+}
+
+/* --------------------------------------------------
+EASY DASHBOARD COMPATIBILITY
+-------------------------------------------------- */
+def on() {
+    logInfo "Switch ON command received (opening blind)"
+    open()
+}
+
+def off() {
+    logInfo "Switch OFF command received (closing blind)"
+    close()
+}
+
+/* --------------------------------------------------
+INITIALIZATION
+-------------------------------------------------- */
+def installed() {
+    logInfo "Child device installed"
+    initialize()
+}
+
+def updated() {
+    logInfo "Child device updated"
+    initialize()
+}
+
+def initialize() {
+    sendEvent(name: "windowShade", value: "unknown")
+    sendEvent(name: "level", value: 0)
+    sendEvent(name: "position", value: 0)
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "direction", value: "none")
+    sendEvent(name: "switch", value: "off")
+    
+    state.movementState = [
+        isMoving: false,
+        direction: null,
+        startPosition: null,
+        targetPosition: null,
+        startTime: null,
+        estimatedDuration: null,
+        distance: null
+    ]
+
+    logInfo "Initialized with Full Travel Time: ${fullTravelTime}s (Hubitat logic: 100=Open, 0=Closed)"
+}
+
+/* --------------------------------------------------
+POSITION INVERSION HELPER - NOT USED (Parent handles inversion)
+-------------------------------------------------- */
+// private Integer invertIfNeeded(Integer position) {
+//     if (position == null) return null
+//     return invertPosition ? (100 - position) : position
+// }
+
+/* --------------------------------------------------
+MOVEMENT TRACKING & INTERPOLATION
+-------------------------------------------------- */
+def startMovementTracking(String direction, Integer targetPos = null) {
+    if (!interpolationEnabled) return
+    
+    // FIX: Kill any existing interpolation to prevent overlap/jumping
+    stopMovementTracking()
+    
+    // FIX: Explicitly cast currentValue to Integer to avoid Groovy ambiguity on DD7002B
+    def currentPos = (device.currentValue("level") ?: 0) as Integer
+    // Hubitat logic: open=100, close=0
+    targetPos = (targetPos ?: ((direction == "open") ? 100 : 0)) as Integer
+
+    // FIX: Ensure distance calculation uses proper Integer arithmetic
+    def distance = Math.abs(targetPos - currentPos) as Integer
+    def travelTime = fullTravelTime as long
+    
+    // FIX: Parentheses around cast to fix "unexpected token: /" error
+    def estimatedDuration = (distance > 0) ? (travelTime * ((distance as double) / 100.0) * 1000) as long : 0L
+    estimatedDuration = Math.max(1000L, estimatedDuration)
+
+    state.movementState = [
+        isMoving: true,
+        direction: direction,
+        startPosition: currentPos,
+        targetPosition: targetPos,
+        startTime: now(),
+        estimatedDuration: estimatedDuration,
+        distance: distance
+    ]
+
+    sendEvent(name: "moving", value: "true")
+    sendEvent(name: "direction", value: direction)
+    sendEvent(name: "targetPosition", value: targetPos)
+    sendEvent(name: "lastPosition", value: currentPos)
+    sendEvent(name: "eta", value: (estimatedDuration / 1000) as Integer)
+    sendEvent(name: "switch", value: "on")
+
+    logInfo "Movement tracking: ${direction} from ${currentPos} to ${targetPos} (${distance} units, est. ${(estimatedDuration/1000)}s)"
+
+    unschedule("interpolatePosition")
+    runInMillis(interpolationInterval * 1000, "interpolatePosition")
+}
+
+def stopMovementTracking(Integer finalPosition = null) {
+    unschedule("interpolatePosition")
+    def wasMoving = state.movementState?.isMoving ?: false
+
+    // FIX: Prioritize current level over target position when finalPosition is null
+    // This prevents snapping to target when Bridge sends "Stop" without position
+    f (finalPosition == null) {
+    // Check if this is a uni-directional motor (no position feedback)
+    def wirelessMode = device.getDataValue("wirelessMode") as Integer
+    
+    if (wirelessMode == 0) {
+        // Uni-directional: assume reached target
+        finalPosition = state.movementState?.targetPosition ?: 0
+        logDebug "Uni-directional motor: using target position ${finalPosition}"
+    } else {
+        // Bi-directional: use current level or fallback chain
+        finalPosition = device.currentValue("level") ?: 
+                        state.movementState?.startPosition ?: 
+                        state.movementState?.targetPosition ?: 0
+        logDebug "Bi-directional motor: using fallback position ${finalPosition}"
+    }
+}
+
+    state.movementState = [
+        isMoving: false,
+        direction: null,
+        startPosition: null,
+        targetPosition: null,
+        startTime: null,
+        estimatedDuration: null,
+        distance: null
+    ]
+
+    sendEvent(name: "moving", value: "false")
+    sendEvent(name: "direction", value: "none")
+    sendEvent(name: "eta", value: 0)
+    sendEvent(name: "switch", value: "off")
+
+    sendEvent(name: "level", value: finalPosition)
+    sendEvent(name: "position", value: finalPosition)
+    updateWindowShadeState(finalPosition)
+
+    if (wasMoving) {
+        logInfo "Movement tracking stopped at position: ${finalPosition}"
+    }
+
+    runIn(2, "refresh")
+}
+
+def interpolatePosition() {
+    def moveState = state.movementState
+    if (!moveState?.isMoving) return
+
+    // FIX: Explicit type casting with proper parentheses
+    def elapsed = (now() - (moveState.startTime as long)) as long
+    def duration = moveState.estimatedDuration as long
+    def start = moveState.startPosition as Integer
+    def target = moveState.targetPosition as Integer
+
+    if (elapsed >= duration) {
+        logInfo "Interpolation complete, finalizing position at ${target}"
+        stopMovementTracking(target)
+        return
+    }
+
+    // FIX: Parentheses around casts for division
+    def progress = ((elapsed as double) / (duration as double))
+    def distance = (target - start) as Integer
+    def interpolatedPos = Math.round(start + (distance * progress)) as Integer
+    interpolatedPos = Math.min(100, Math.max(0, interpolatedPos)) as Integer
+
+    def remainingMs = (duration - elapsed) as long
+    def remainingSeconds = Math.round(remainingMs / 1000) as Integer
+
+    sendEvent(name: "level", value: interpolatedPos)
+    sendEvent(name: "position", value: interpolatedPos)
+    sendEvent(name: "eta", value: remainingSeconds)
+    updateWindowShadeState(interpolatedPos)
+
+    logDebug "Interpolated: ${interpolatedPos}% (${remainingSeconds}s remaining, ${Math.round(progress*100)}% complete)"
+    runInMillis(interpolationInterval * 1000, "interpolatePosition")
+}
+
+def updateWindowShadeState(Integer position) {
+    position = position ?: 0
+    def shadeValue
+    // Hubitat logic: 100=Open, 0=Closed
+    if (position == 100) {
+        shadeValue = "open"
+    } else if (position == 0) {
+        shadeValue = "closed"
+    } else {
+        shadeValue = "partially open"
+    }
+
+    def currentShade = device.currentValue("windowShade")
+    if (currentShade != shadeValue) {
+        sendEvent(name: "windowShade", value: shadeValue)
+    }
+}
+
+/* --------------------------------------------------
+STANDARD WINDOWSHADE COMMANDS
+-------------------------------------------------- */
+def open() {
+    logInfo "Open command received"
+    startMovementTracking("open")
+    parent?.sendChildOpen(device.deviceNetworkId)
+}
+
+def close() {
+    logInfo "Close command received"
+    startMovementTracking("close")
+    parent?.sendChildClose(device.deviceNetworkId)
+}
+
+def stop() {
+    logInfo "Stop command received - current level: ${device.currentValue('level') ?: 'unknown'}"
+    stopMovementTracking()
+    parent?.sendChildStop(device.deviceNetworkId)
+}
+
+def refresh() {
+    logDebug "Refreshing device status"
+    parent?.refreshChild(device.deviceNetworkId)
+}
+
+def setPosition(position) {
+    def hubitatPos = (position as Integer)
+    hubitatPos = Math.min(100, Math.max(0, hubitatPos)) as Integer
+    
+    // NOTE: Parent driver handles inversion to Bridge protocol. Send Hubitat position directly.
+    // Bridge expects: 0=Open, 100=Closed. Parent converts: Hubitat 100 → Bridge 0
+    
+    def currentPos = (device.currentValue("level") ?: 0) as Integer
+    def direction = (hubitatPos > currentPos) ? "open" : "close"
+
+    logInfo "Setting position to ${hubitatPos} (Hubitat logic, Parent handles Bridge conversion)"
+    startMovementTracking(direction, hubitatPos)
+    // Send Hubitat position - Parent will invert if needed before sending to Bridge
+    parent?.sendChildCommand(device.deviceNetworkId, hubitatPos)
+}
+def setLevel(Integer level) {
+    // Ensure level is an integer and clamp it (though setPosition does this too)
+    def pos = level as Integer
+    logInfo "setLevel called with ${pos}, forwarding to setPosition"
+    setPosition(pos)
+}
+
+def startPositionChange(String direction) {
+    logDebug "Starting position change: ${direction}"
+    startMovementTracking(direction)
+    if (direction == "open") {
+        parent?.sendChildOpen(device.deviceNetworkId)
+    } else if (direction == "close") {
+        parent?.sendChildClose(device.deviceNetworkId)
+    } else {
+        logWarn "Unknown direction for startPositionChange: ${direction}"
+    }
+}
+
+def stopPositionChange() {
+    logDebug "Stopping position change"
+    stopMovementTracking()
+    parent?.sendChildStop(device.deviceNetworkId)
+}
+
+def presetPosition() {
+    setPosition(presetPosition ?: 50)
+}
+
+/* --------------------------------------------------
+EXTERNAL STATUS UPDATE HANDLER
+-------------------------------------------------- */
+def updateStatus(Map data) {
+    def reportedPos = data.currentPosition ?: data.position ?: data.level
+    
+    // FIX: Detect Stop operation or Limit state even if position is missing
+    def isStopping = (data.operation == 2)  // 2 = Stop per protocol
+    def isLimited = (data.currentState != null && data.currentState != 0)  // 0 = No limits
+
+    if (reportedPos != null) {
+        // Parent already inverted Bridge position to Hubitat logic
+        def hubitatLevel = reportedPos as Integer
+        logDebug "Status update: Received Hubitat position=${hubitatLevel} (Parent handled inversion)"
+        stopMovementTracking(hubitatLevel)
+    } else if (isStopping || isLimited) {
+        // FIX: Bridge signaled stop/limit but didn't send position - use current level
+        logDebug "Status update: Stop/Limit detected without position, using current level"
+        stopMovementTracking(null)  // Will use device.currentValue("level") as fallback
+    } else {
+        logDebug "Status update without position field, keys: ${data.keySet()}"
+        stopMovementTracking(null)
+    }
+
+    // Standard status attributes
+    if (data.currentAngle != null) {
+        logDebug "Angle data received but ignored (position-only driver)"
+    }
+    
+    // FIX: Battery calculation with proper type casting for DD7002B
+    if (data.batteryLevel != null) {
+        def batteryLevelVal = data.batteryLevel as Integer
+        sendEvent(name: "batteryLevel", value: batteryLevelVal)
+        // Use 150.0 for floating-point division, explicit casts to avoid Groovy ambiguity
+        def batteryPercent = Math.min(100, Math.max(0, ((((batteryLevelVal - 700) as double) / 150.0 * 100) as Integer)))
+        sendEvent(name: "battery", value: batteryPercent)
+    }
+    
+    if (data.chargingState != null) {
+        def isCharging = (data.chargingState == 1)
+        sendEvent(name: "chargingState", value: isCharging ? "charging" : "not charging")
+    }
+    
+    if (data.RSSI != null) {
+        sendEvent(name: "rssi", value: data.RSSI)
+    }
+    
+    if (data.operation != null) {
+        def operationTypes = [0: "Close", 1: "Open", 2: "Stop", 5: "Query"]
+        sendEvent(name: "operation", value: operationTypes[data.operation] ?: data.operation)
+    }
+    
+    if (data.currentState != null) {
+        def limitStates = [0: "No Limits", 1: "Top-Limit", 2: "Bottom-Limit", 3: "Limits", 4: "3rd-Limit"]
+        sendEvent(name: "limitState", value: limitStates[data.currentState] ?: data.currentState)
+    }
+    
+    if (data.type != null) {
+        def blindTypes = [1: "Roller", 3: "Roman", 4: "Honeycomb", 5: "Shangri-La", 
+                         6: "Shutter", 7: "Gate", 8: "Awning", 10: "Day/Night", 
+                         11: "Dimming", 12: "Curtain", 13: "Curtain Left", 14: "Curtain Right"]
+        def blindName = blindTypes[data.type] ?: "Unknown"
+        sendEvent(name: "blindTypeName", value: blindName)
+    }
+}
+
+/* --------------------------------------------------
+HELPER METHODS
+-------------------------------------------------- */
+def getBlindTypeName() {
+    return device.getDataValue("blindTypeName") ?: "Roller Blind"
+}
+
+/* --------------------------------------------------
+LOGGING HELPERS
+-------------------------------------------------- */
+private logInfo(msg) {
+    log.info "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logDebug(msg) {
+    if (debugLogging) log.debug "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logWarn(msg) {
+    log.warn "[Child ${device.deviceNetworkId}] ${msg}"
+}
+
+private logError(msg, ex = null) {
+    log.error "[Child ${device.deviceNetworkId}] ${msg}"
+    if (ex) log.exception("Error details", ex)
+}
