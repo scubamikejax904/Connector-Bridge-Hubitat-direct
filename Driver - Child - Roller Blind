@@ -1,7 +1,7 @@
 /**
 Connector Roller Blind Child Driver - Position Only
 Simplified implementation for standard roller blinds (types 1,3,4,5,6,7,8,10,11,12,13)
-
+ 
 Release v30.1 04-10-2026 - improved StopeMovementTracking to assume on Unidirectional motors that when they stop it's at the target level (they don't report position so it's all a guess)
 
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
