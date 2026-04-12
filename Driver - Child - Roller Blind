@@ -1,16 +1,15 @@
 /**
 Connector Roller Blind Child Driver - Position Only
 Simplified implementation for standard roller blinds (types 1,3,4,5,6,7,8,10,11,12,13)
- 
-Release v30.1 04-10-2026 - improved StopeMovementTracking to assume on Unidirectional motors that when they stop it's at the target level (they don't report position so it's all a guess)
-
+Release v30 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion
+DD7002B & DD7006 Compatible - Fixed type coercion issues
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
 */
 metadata {
     definition(name: "Connector Roller Blind Child",
     namespace: "connector",
     author: "Scubamikejax904 & Manus",
-    importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Child%20-%20Roller%20Blind"
+    importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-roller-blind-child.groovy"
               )
     {
         capability "WindowShade"
@@ -29,7 +28,7 @@ metadata {
         command "on"
         command "off"
         //command "setLevel", [[name: "level", type: "NUMBER", description: "Level 0-100"]]
-
+ 
         // Required attributes for Hubitat's vertical shade tile
         attribute "windowShade", "enum", ["open", "closed", "partially open", "unknown"]
         attribute "level", "number"
@@ -203,22 +202,12 @@ def stopMovementTracking(Integer finalPosition = null) {
 
     // FIX: Prioritize current level over target position when finalPosition is null
     // This prevents snapping to target when Bridge sends "Stop" without position
-    f (finalPosition == null) {
-    // Check if this is a uni-directional motor (no position feedback)
-    def wirelessMode = device.getDataValue("wirelessMode") as Integer
-    
-    if (wirelessMode == 0) {
-        // Uni-directional: assume reached target
-        finalPosition = state.movementState?.targetPosition ?: 0
-        logDebug "Uni-directional motor: using target position ${finalPosition}"
-    } else {
-        // Bi-directional: use current level or fallback chain
+    if (finalPosition == null) {
         finalPosition = device.currentValue("level") ?: 
                         state.movementState?.startPosition ?: 
                         state.movementState?.targetPosition ?: 0
-        logDebug "Bi-directional motor: using fallback position ${finalPosition}"
+        logDebug "No final position provided, using fallback: ${finalPosition}"
     }
-}
 
     state.movementState = [
         isMoving: false,
