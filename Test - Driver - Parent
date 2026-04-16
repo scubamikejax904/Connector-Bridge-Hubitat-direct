@@ -1,13 +1,15 @@
-/** 
+/**
  * Connector WLAN Integration - Full Production (New Protocol Only)
  * DD7006 & DD7002B Compatible - Protocol v1.03+
  * Complete implementation of Connector WLAN Integration Protocol v1.03
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Test v29 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v29 to
- * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
+ * Test v32 - 04-16-2026 - Fixed Multicast Heartbeat
+ *
+ *Copyright 2026 Michael Gartner (scubamikejax904)
  */
+
 import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 import hubitat.helper.HexUtils
@@ -18,7 +20,7 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               //importUrl: "https://raw.githubusercontent.com/connector/hubitat/main/connector-wlan-integration-parent.groovy"
+               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
               )
     {
         capability "Initialize"
@@ -28,6 +30,7 @@ metadata {
         command "logBridgeInfo"
         command "listOrphanedDevices"
         command "removeUnusedDevices"
+        command "refreshBridgeData"  // Add this line alongside your other commands
     }
 
     preferences {
@@ -129,6 +132,24 @@ def initialize() {
     state.queuePaused = false
     state.orphanedDevices = []
 
+     // ✅ NEW MULTICAST INIT (Hubitat 2.5.0.115+ API)
+try {
+    // Get multicast socket for the bridge's heartbeat address/port
+    def heartbeatSocket = interfaces.getMulticastSocket("238.0.0.18", 32101)
+    
+    // Connect if not already connected
+    if (heartbeatSocket && !heartbeatSocket.connected) {
+        heartbeatSocket.connect()
+        logInfo "✓ Joined multicast group 238.0.0.18:32101 for heartbeats"
+    } else if (heartbeatSocket?.connected) {
+        logDebug "Multicast socket already connected"
+    } else {
+        logWarn "⚠ Could not obtain multicast socket"
+    }
+} catch (Exception e) {
+    logWarn "⚠ Multicast initialization failed: ${e.message}. Falling back to polling."
+}
+    
     runIn(3, "discoverDevices")
 
     if (offlineTimeout != null && offlineTimeout > 0) {
@@ -142,8 +163,16 @@ def initialize() {
         schedule("0 */${autoRefreshInterval} * * * ?", "refresh")
         logInfo "Auto-refresh enabled every ${autoRefreshInterval} minutes."
     }
-    
+        
     sendEvent(name: "orphanedDevices", value: 0)
+   // ✅ Restore & persist bridge status safely
+    state.bridgeStatus = state.bridgeStatus ?: "checking"
+    sendEvent(name: "bridgeStatus", value: state.bridgeStatus)
+    
+    // ✅ Schedule UI/data updates after device is fully registered
+    runIn(1, "updateBridgeDataValues")
+    runEvery5Minutes("checkBridgeStatus")
+    
 }
 
 /* --------------------------------------------------
@@ -166,17 +195,16 @@ def getBridgeStatus() {
 def logBridgeInfo() {
     def info = state.bridgeInfo ?: [:]
     def deviceTypes = getDeviceTypes()
-    def bridgeStates = getBridgeStates()
+    def bridgeStatus = device.currentValue("bridgeStatus") ?: "checking"
+    
     logInfo "=== Bridge Information ==="
     logInfo "MAC: ${info.mac ?: 'Unknown'}"
     logInfo "Device Type: ${deviceTypes[info.deviceType] ?: info.deviceType}"
     logInfo "Protocol Version: ${info.protocolVersion ?: 'Unknown'}"
-    logInfo "Current State: ${bridgeStates[info.currentState] ?: info.currentState}"
-    logInfo "Number of Devices: ${info.numberOfDevices ?: 0}"
-    logInfo "RSSI: ${info.RSSI ?: 'Unknown'}"
+    logInfo "Number of Devices: ${info.numberOfDevices != null ? info.numberOfDevices : 'Waiting for discovery...'}"
+    logInfo "Bridge Status: ${bridgeStatus.capitalize()}"
     logInfo "=========================="
 }
-
 /* --------------------------------------------------
    CHILD MANAGEMENT
 -------------------------------------------------- */
@@ -610,6 +638,19 @@ def generateAccessToken(token) {
    UDP SEND
 -------------------------------------------------- */
 def sendUdp(Map message) {
+    // 🔍 TEMP DIAGNOSTIC: Log EVERY raw input
+    logDebug "🔍 sendUdp() called with msgType: ${message?.msgType}, mac: ${message?.mac}"
+    
+    cleanupPendingMsgIDs()
+    
+    // Try to parse as Hubitat LAN message (unicast responses)
+    def lanMsg = null
+    try {
+        lanMsg = parseLanMessage(message)
+    } catch (Exception e) {
+        lanMsg = null
+    }
+    
     String json = JsonOutput.toJson(message)
 
     if (message.msgID) {
@@ -638,38 +679,74 @@ def sendUdp(Map message) {
 /* --------------------------------------------------
    PARSE - Main message handler
 -------------------------------------------------- */
-def parse(String description) {
-    cleanupPendingMsgIDs()
-    
-    def msg = parseLanMessage(description)
-    if (!msg?.payload) return
-    
-    String jsonString = new String(HexUtils.hexStringToByteArray(msg.payload), "UTF-8")
-    logDebug "UDP Received: ${jsonString}"
+def parse(message) {
+    try {
+        if (message == null) return
+        cleanupPendingMsgIDs()
 
-    def json = new JsonSlurper().parseText(jsonString)
+        String raw = message.toString().trim()
+        log.debug '[Connector] parse() input: ' + message?.class?.simpleName
+        String jsonString = raw
 
-    switch(json.msgType) {
-        case "GetDeviceListAck":
-            handleGetDeviceListAck(json)
-            break
-        case "Heartbeat":
-            handleHeartbeat(json)
-            break
-        case "WriteDeviceAck":
-            handleWriteDeviceAck(json)
-            break
-        case "ReadDeviceAck":
-            handleReadDeviceAck(json)
-            break
-        case "Report":
-            handleReport(json)
-            break
-        default:
-            logDebug "Unknown message type: ${json.msgType}"
+        // 1️⃣ Hubitat Unicast LAN Reply: "index:00, ..., payload:<hex>"
+        if (raw.contains('LAN_TYPE_UDPCLIENT')) {
+            def match = raw =~ /payload:([0-9A-Fa-f]+)/
+            if (match) {
+                jsonString = new String(hubitat.helper.HexUtils.hexStringToByteArray(match[0][1]), 'UTF-8')
+                log.debug '[Connector] Decoded from LAN metadata'
+            }
+        } 
+        // 2️⃣ Multicast JSON Wrapper: {"payload":"<hex>"}
+        else if (raw.startsWith('{"payload":"')) {
+            try {
+                def wrapper = new groovy.json.JsonSlurper().parseText(raw)
+                String inner = wrapper?.payload?.toString()?.trim()
+                if (inner && inner.matches('^[0-9A-Fa-f]+$')) {
+                    jsonString = new String(hubitat.helper.HexUtils.hexStringToByteArray(inner), 'UTF-8')
+                    log.debug '[Connector] Decoded from multicast wrapper'
+                } else {
+                    jsonString = inner ?: raw
+                }
+            } catch (e) {
+                log.warn '[Connector] Multicast wrapper parse failed: ' + e.message
+            }
+        } 
+        // 3️⃣ Raw Hex String
+        else if (raw.matches('^[0-9A-Fa-f]+$') && raw.length() % 2 == 0) {
+            jsonString = new String(hubitat.helper.HexUtils.hexStringToByteArray(raw), 'UTF-8')
+            log.debug '[Connector] Decoded from raw hex'
+        }
+
+         // ✅ Mark bridge online on ANY valid response
+        state.lastBridgeResponseTime = now()
+        if (device.currentValue('bridgeStatus') != 'online') {
+            state.bridgeStatus = 'online'
+            sendEvent(name: 'bridgeStatus', value: 'online')
+        }
+
+        // 4️⃣ Parse & Route
+        def json = new groovy.json.JsonSlurper().parseText(jsonString)
+        def msgType = json?.msgType
+        if (!msgType) {
+            log.warn '[Connector] msgType is null'
+            return
+        }
+
+        switch (msgType) {
+            case 'GetDeviceListAck': handleGetDeviceListAck(json); break
+            case 'Heartbeat':
+                log.info '[Connector] ❤️ HEARTBEAT RECEIVED! State: ' + json.data?.currentState + ', Devices: ' + json.data?.numberOfDevices + ', RSSI: ' + json.data?.RSSI
+                handleHeartbeat(json)
+                break
+            case 'ReadDeviceAck': handleReadDeviceAck(json); break
+            case 'WriteDeviceAck': handleWriteDeviceAck(json); break
+            case 'Report': handleReport(json); break
+            default: log.debug '[Connector] Unknown msgType: ' + msgType
+        }
+    } catch (Exception e) {
+        log.error '[Connector] parse() fatal: ' + e.message
     }
 }
-
 /* --------------------------------------------------
    MESSAGE HANDLERS
 -------------------------------------------------- */
@@ -679,16 +756,22 @@ def handleGetDeviceListAck(Map json) {
     state.queuePaused = false
     logInfo "Session token acquired/refreshed."
 
+    // FIX: Filter out the bridge itself (02000001) when counting child devices
+    def childCount = json.data?.count { it?.deviceType != "02000001" } ?: 0
+
     state.bridgeInfo = [
         mac: json.mac,
         deviceType: json.deviceType,
-        protocolVersion: json.ProtocolVersion
+        protocolVersion: json.ProtocolVersion,
+        numberOfDevices: childCount
     ]
-
+// ✅ NEW: Update Device Data tab immediately
+    updateBridgeDataValues()
     processCommandQueue()
 
     def discoveredMacs = []
-    json.data.each { device ->
+    json.data?.each { device ->
+        // Only create children for actual motor/receiver devices
         if (device.deviceType in ["10000000", "10000001", "22000000", "22000002", "22000005"]) {
             createChild(device)
             discoveredMacs << device.mac
@@ -716,6 +799,10 @@ def handleHeartbeat(Map json) {
         sendEvent(name: "bridgeState", value: bridgeStates[json.data.currentState] ?: "Unknown")
         sendEvent(name: "deviceCount", value: json.data.numberOfDevices)
         sendEvent(name: "bridgeRSSI", value: json.data.RSSI)
+
+        // ✅ NEW: Update Device Data tab with fresh heartbeat values
+        updateBridgeDataValues()
+
 
         logDebug "Bridge state: ${bridgeStates[json.data.currentState]}, Devices: ${json.data.numberOfDevices}, RSSI: ${json.data.RSSI}"
     }
@@ -926,6 +1013,58 @@ def updateTDBUDeviceStatus(child, Map data) {
     child.updateDataValue("isTDBU", "true")
     child.updateDataValue("blindType", "9")
     child.updateDataValue("blindTypeName", "TDBU")
+}
+
+def checkBridgeStatus() {
+    def lastTime = state.lastBridgeResponseTime ?: 0
+    def thresholdMs = 5 * 60 * 1000 // 5 minutes
+    def currentStatus = device.currentValue("bridgeStatus") ?: "checking"
+    def isOnline = (now() - lastTime) < thresholdMs
+    def newStatus = isOnline ? "online" : "offline"
+
+    // Only update if status actually changed
+    if (currentStatus != newStatus) {
+        state.bridgeStatus = newStatus  // ✅ PERSIST TO STORAGE
+        sendEvent(name: "bridgeStatus", value: newStatus)  // ✅ UPDATE UI
+        logInfo "🌐 Bridge status changed to: ${newStatus.toUpperCase()}"
+        updateBridgeDataValues()  // ✅ REFRESH DEVICE DATA TAB
+    }
+}
+
+// Updates the parent device's "Device Data" tab with bridge info
+def updateBridgeDataValues() {
+    // Safety check: ensure device is ready
+    if (!device) return
+    
+    def info = state.bridgeInfo ?: [:]
+    def currentStatus = device.currentValue("bridgeStatus")
+    if (!currentStatus) currentStatus = state.bridgeStatus ?: "checking"
+    
+    // Core bridge identity
+    device.updateDataValue("bridgeMac", info.mac ?: "Unknown")
+    device.updateDataValue("deviceType", getDeviceTypes()[info.deviceType] ?: info.deviceType)
+    device.updateDataValue("protocolVersion", info.protocolVersion ?: "Unknown")
+    device.updateDataValue("numberOfDevices", info.numberOfDevices?.toString() ?: "0")
+    
+    // Connectivity status (capitalize safely)
+    device.updateDataValue("bridgeStatus", currentStatus.toString().capitalize())
+    
+    // Protocol state (only if heartbeat data exists)
+    if (info.currentState != null) {
+        device.updateDataValue("protocolState", getBridgeStates()[info.currentState] ?: "Unknown")
+    }
+    if (info.RSSI != null) {
+        device.updateDataValue("bridgeRSSI", "${info.RSSI} dBm")
+    }
+    
+    // Timestamp
+    device.updateDataValue("lastUpdated", new Date().format("yyyy-MM-dd HH:mm:ss"))
+}
+
+def refreshBridgeData() {
+    logInfo "Manually refreshing bridge data display..."
+    updateBridgeDataValues()
+    logInfo "✓ Bridge Device Data tab updated"
 }
 
 /* --------------------------------------------------
