@@ -7,6 +7,9 @@ Release v30 - 04-08-2026 - Hubitat logic only (100=Open, 0=Closed), Parent handl
 
 DD7002B & DD7006 Compatible - Fixed type coercion issues
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
+
+*Copyright 2026 Michael Gartner (scubamikejax904)
+
 */
 
 metadata {
