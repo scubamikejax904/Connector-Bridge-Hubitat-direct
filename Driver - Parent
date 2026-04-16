@@ -5,8 +5,7 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Release v30 - 04-08-2026 - Null-safe field processing + Position inversion + Battery calc fixes Jumped to v30 to
- * keep all drivers same version for testing, when I move to production I will change them to a different version numbering system
+ * Release v31 - 04-15-2026 - Fixed Bridge state to be online if UDP messages are received (heartbeat unreliable with Hubitat)
  */
 
 import groovy.json.JsonSlurper
@@ -29,6 +28,7 @@ metadata {
         command "logBridgeInfo"
         command "listOrphanedDevices"
         command "removeUnusedDevices"
+        command "refreshBridgeData"  // Add this line alongside your other commands
     }
 
     preferences {
@@ -145,6 +145,14 @@ def initialize() {
     }
     
     sendEvent(name: "orphanedDevices", value: 0)
+   // ✅ Restore & persist bridge status safely
+    state.bridgeStatus = state.bridgeStatus ?: "checking"
+    sendEvent(name: "bridgeStatus", value: state.bridgeStatus)
+    
+    // ✅ Schedule UI/data updates after device is fully registered
+    runIn(1, "updateBridgeDataValues")
+    runEvery5Minutes("checkBridgeStatus")
+    
 }
 
 /* --------------------------------------------------
@@ -167,17 +175,16 @@ def getBridgeStatus() {
 def logBridgeInfo() {
     def info = state.bridgeInfo ?: [:]
     def deviceTypes = getDeviceTypes()
-    def bridgeStates = getBridgeStates()
+    def bridgeStatus = device.currentValue("bridgeStatus") ?: "checking"
+    
     logInfo "=== Bridge Information ==="
     logInfo "MAC: ${info.mac ?: 'Unknown'}"
     logInfo "Device Type: ${deviceTypes[info.deviceType] ?: info.deviceType}"
     logInfo "Protocol Version: ${info.protocolVersion ?: 'Unknown'}"
-    logInfo "Current State: ${bridgeStates[info.currentState] ?: info.currentState}"
-    logInfo "Number of Devices: ${info.numberOfDevices ?: 0}"
-    logInfo "RSSI: ${info.RSSI ?: 'Unknown'}"
+    logInfo "Number of Devices: ${info.numberOfDevices != null ? info.numberOfDevices : 'Waiting for discovery...'}"
+    logInfo "Bridge Status: ${bridgeStatus.capitalize()}"
     logInfo "=========================="
 }
-
 /* --------------------------------------------------
    CHILD MANAGEMENT
 -------------------------------------------------- */
@@ -645,6 +652,13 @@ def parse(String description) {
     def msg = parseLanMessage(description)
     if (!msg?.payload) return
     
+    // ✅ INSTANT ONLINE STATUS UPDATE
+    state.lastBridgeResponseTime = now()
+    if (device.currentValue("bridgeStatus") != "online") {
+        state.bridgeStatus = "online"
+        sendEvent(name: "bridgeStatus", value: "online")
+    }
+    
     String jsonString = new String(HexUtils.hexStringToByteArray(msg.payload), "UTF-8")
     logDebug "UDP Received: ${jsonString}"
 
@@ -680,16 +694,22 @@ def handleGetDeviceListAck(Map json) {
     state.queuePaused = false
     logInfo "Session token acquired/refreshed."
 
+    // FIX: Filter out the bridge itself (02000001) when counting child devices
+    def childCount = json.data?.count { it?.deviceType != "02000001" } ?: 0
+
     state.bridgeInfo = [
         mac: json.mac,
         deviceType: json.deviceType,
-        protocolVersion: json.ProtocolVersion
+        protocolVersion: json.ProtocolVersion,
+        numberOfDevices: childCount
     ]
-
+// ✅ NEW: Update Device Data tab immediately
+    updateBridgeDataValues()
     processCommandQueue()
 
     def discoveredMacs = []
-    json.data.each { device ->
+    json.data?.each { device ->
+        // Only create children for actual motor/receiver devices
         if (device.deviceType in ["10000000", "10000001", "22000000", "22000002", "22000005"]) {
             createChild(device)
             discoveredMacs << device.mac
@@ -717,6 +737,10 @@ def handleHeartbeat(Map json) {
         sendEvent(name: "bridgeState", value: bridgeStates[json.data.currentState] ?: "Unknown")
         sendEvent(name: "deviceCount", value: json.data.numberOfDevices)
         sendEvent(name: "bridgeRSSI", value: json.data.RSSI)
+
+        // ✅ NEW: Update Device Data tab with fresh heartbeat values
+        updateBridgeDataValues()
+
 
         logDebug "Bridge state: ${bridgeStates[json.data.currentState]}, Devices: ${json.data.numberOfDevices}, RSSI: ${json.data.RSSI}"
     }
@@ -927,6 +951,58 @@ def updateTDBUDeviceStatus(child, Map data) {
     child.updateDataValue("isTDBU", "true")
     child.updateDataValue("blindType", "9")
     child.updateDataValue("blindTypeName", "TDBU")
+}
+
+def checkBridgeStatus() {
+    def lastTime = state.lastBridgeResponseTime ?: 0
+    def thresholdMs = 5 * 60 * 1000 // 5 minutes
+    def currentStatus = device.currentValue("bridgeStatus") ?: "checking"
+    def isOnline = (now() - lastTime) < thresholdMs
+    def newStatus = isOnline ? "online" : "offline"
+
+    // Only update if status actually changed
+    if (currentStatus != newStatus) {
+        state.bridgeStatus = newStatus  // ✅ PERSIST TO STORAGE
+        sendEvent(name: "bridgeStatus", value: newStatus)  // ✅ UPDATE UI
+        logInfo "🌐 Bridge status changed to: ${newStatus.toUpperCase()}"
+        updateBridgeDataValues()  // ✅ REFRESH DEVICE DATA TAB
+    }
+}
+
+// Updates the parent device's "Device Data" tab with bridge info
+def updateBridgeDataValues() {
+    // Safety check: ensure device is ready
+    if (!device) return
+    
+    def info = state.bridgeInfo ?: [:]
+    def currentStatus = device.currentValue("bridgeStatus")
+    if (!currentStatus) currentStatus = state.bridgeStatus ?: "checking"
+    
+    // Core bridge identity
+    device.updateDataValue("bridgeMac", info.mac ?: "Unknown")
+    device.updateDataValue("deviceType", getDeviceTypes()[info.deviceType] ?: info.deviceType)
+    device.updateDataValue("protocolVersion", info.protocolVersion ?: "Unknown")
+    device.updateDataValue("numberOfDevices", info.numberOfDevices?.toString() ?: "0")
+    
+    // Connectivity status (capitalize safely)
+    device.updateDataValue("bridgeStatus", currentStatus.toString().capitalize())
+    
+    // Protocol state (only if heartbeat data exists)
+    if (info.currentState != null) {
+        device.updateDataValue("protocolState", getBridgeStates()[info.currentState] ?: "Unknown")
+    }
+    if (info.RSSI != null) {
+        device.updateDataValue("bridgeRSSI", "${info.RSSI} dBm")
+    }
+    
+    // Timestamp
+    device.updateDataValue("lastUpdated", new Date().format("yyyy-MM-dd HH:mm:ss"))
+}
+
+def refreshBridgeData() {
+    logInfo "Manually refreshing bridge data display..."
+    updateBridgeDataValues()
+    logInfo "✓ Bridge Device Data tab updated"
 }
 
 /* --------------------------------------------------
