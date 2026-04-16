@@ -2,7 +2,14 @@
 
 **Please note if your Motors are Uni-directional you will not get position data, I am unsure if Device Interpolation will work as intended for you**
 
-Release v30 - 04-08-2026
+
+Latest Driver Versions
+Parent Driver: Release v31 - 04-15-2026
+Child Roller Driver: Release v30
+Child TDBU Driver: Release v30
+Child Venetian Driver: Release v30
+
+
 Thank you Jcongdon01 for testing with DD7002B Hub
 
 [Hubitat community Driver thread](https://community.hubitat.com/t/driver-connector-relay-hubitat-driver-dd7006-p-box-local-control/161608/26?u=scubamikejax904)
@@ -127,6 +134,7 @@ Your installation is now complete!
     -   Go to the parent device page, turn on `Enable Debug Logging`, and save preferences. Try a command and check the logs for `AccessToken error`. This indicates a mismatch between your key and the token from the bridge.
     -    Verify that multicast can get through your router/firewall see this post for the hubitat multicast socket test and example log
       [Hubitat community Driver thread](https://community.hubitat.com/t/driver-connector-relay-hubitat-driver-dd7006-p-box-local-control/161608/26?u=scubamikejax904)
+ - Any other issues Please join the Hubitat Community and post in the driver thread [Hubitat community Driver thread](https://community.hubitat.com/t/driver-connector-relay-hubitat-driver-dd7006-p-box-local-control/161608/26?u=scubamikejax904)
 
 -   **Device status shows "unknown":**
     -   This should no longer happen with the latest version of the driver. If it does, ensure you have the correct code installed. Click `Refresh` on the parent device page to get the latest status.
