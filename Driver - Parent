@@ -6,6 +6,8 @@
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
  * Release v31 - 04-15-2026 - Fixed Bridge state to be online if UDP messages are received (heartbeat unreliable with Hubitat)
+ *
+ *Copyright 2026 Michael Gartner (scubamikejax904)
  */
 
 import groovy.json.JsonSlurper
