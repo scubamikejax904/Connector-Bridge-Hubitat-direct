@@ -3,7 +3,7 @@ Connector TDBU Child Driver - Easy Dashboard Compatible
 For: TDBU Blinds (9) - Top-Down/Bottom-Up
 Commands: TDBU-specific (top/bottom positions)
 
-Release v30 04-08-2026 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion, Interpolation stability fixes
+Release v30 - 04-08-2026 - Hubitat logic only (100=Open, 0=Closed), Parent handles inversion, Interpolation stability fixes
 
 DD7002B & DD7006 Compatible - Fixed type coercion issues
 NOTE: Parent driver handles position inversion (Bridge ↔ Hubitat). Child uses Hubitat logic only.
