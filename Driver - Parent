@@ -5,7 +5,7 @@
  * 
  * Thank you Jcongdon01 for testing with DD7002B Hub
  *
- * Release v31 - 04-15-2026 - Fixed Bridge state to be online if UDP messages are received (heartbeat unreliable with Hubitat)
+ * Release v32 - 04-16-2026 - Fixed Multicast Heartbeat
  *
  *Copyright 2026 Michael Gartner (scubamikejax904)
  */
@@ -20,7 +20,7 @@ metadata {
     definition(name: "Connector WLAN Integration (Full)", 
                namespace: "connector", 
                author: "Scubamikejax904 & NinjaAI & Qwen",
-               importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
+               //importUrl: "https://raw.githubusercontent.com/scubamikejax904/Connector-Bridge-Hubitat-direct/refs/heads/main/Driver%20-%20Parent"
               )
     {
         capability "Initialize"
@@ -132,6 +132,24 @@ def initialize() {
     state.queuePaused = false
     state.orphanedDevices = []
 
+     // ✅ NEW MULTICAST INIT (Hubitat 2.5.0.115+ API)
+try {
+    // Get multicast socket for the bridge's heartbeat address/port
+    def heartbeatSocket = interfaces.getMulticastSocket("238.0.0.18", 32101)
+    
+    // Connect if not already connected
+    if (heartbeatSocket && !heartbeatSocket.connected) {
+        heartbeatSocket.connect()
+        logInfo "✓ Joined multicast group 238.0.0.18:32101 for heartbeats"
+    } else if (heartbeatSocket?.connected) {
+        logDebug "Multicast socket already connected"
+    } else {
+        logWarn "⚠ Could not obtain multicast socket"
+    }
+} catch (Exception e) {
+    logWarn "⚠ Multicast initialization failed: ${e.message}. Falling back to polling."
+}
+    
     runIn(3, "discoverDevices")
 
     if (offlineTimeout != null && offlineTimeout > 0) {
@@ -145,7 +163,7 @@ def initialize() {
         schedule("0 */${autoRefreshInterval} * * * ?", "refresh")
         logInfo "Auto-refresh enabled every ${autoRefreshInterval} minutes."
     }
-    
+        
     sendEvent(name: "orphanedDevices", value: 0)
    // ✅ Restore & persist bridge status safely
     state.bridgeStatus = state.bridgeStatus ?: "checking"
@@ -620,6 +638,19 @@ def generateAccessToken(token) {
    UDP SEND
 -------------------------------------------------- */
 def sendUdp(Map message) {
+    // 🔍 TEMP DIAGNOSTIC: Log EVERY raw input
+    logDebug "🔍 sendUdp() called with msgType: ${message?.msgType}, mac: ${message?.mac}"
+    
+    cleanupPendingMsgIDs()
+    
+    // Try to parse as Hubitat LAN message (unicast responses)
+    def lanMsg = null
+    try {
+        lanMsg = parseLanMessage(message)
+    } catch (Exception e) {
+        lanMsg = null
+    }
+    
     String json = JsonOutput.toJson(message)
 
     if (message.msgID) {
@@ -648,45 +679,74 @@ def sendUdp(Map message) {
 /* --------------------------------------------------
    PARSE - Main message handler
 -------------------------------------------------- */
-def parse(String description) {
-    cleanupPendingMsgIDs()
-    
-    def msg = parseLanMessage(description)
-    if (!msg?.payload) return
-    
-    // ✅ INSTANT ONLINE STATUS UPDATE
-    state.lastBridgeResponseTime = now()
-    if (device.currentValue("bridgeStatus") != "online") {
-        state.bridgeStatus = "online"
-        sendEvent(name: "bridgeStatus", value: "online")
-    }
-    
-    String jsonString = new String(HexUtils.hexStringToByteArray(msg.payload), "UTF-8")
-    logDebug "UDP Received: ${jsonString}"
+def parse(message) {
+    try {
+        if (message == null) return
+        cleanupPendingMsgIDs()
 
-    def json = new JsonSlurper().parseText(jsonString)
+        String raw = message.toString().trim()
+        log.debug '[Connector] parse() input: ' + message?.class?.simpleName
+        String jsonString = raw
 
-    switch(json.msgType) {
-        case "GetDeviceListAck":
-            handleGetDeviceListAck(json)
-            break
-        case "Heartbeat":
-            handleHeartbeat(json)
-            break
-        case "WriteDeviceAck":
-            handleWriteDeviceAck(json)
-            break
-        case "ReadDeviceAck":
-            handleReadDeviceAck(json)
-            break
-        case "Report":
-            handleReport(json)
-            break
-        default:
-            logDebug "Unknown message type: ${json.msgType}"
+        // 1️⃣ Hubitat Unicast LAN Reply: "index:00, ..., payload:<hex>"
+        if (raw.contains('LAN_TYPE_UDPCLIENT')) {
+            def match = raw =~ /payload:([0-9A-Fa-f]+)/
+            if (match) {
+                jsonString = new String(hubitat.helper.HexUtils.hexStringToByteArray(match[0][1]), 'UTF-8')
+                log.debug '[Connector] Decoded from LAN metadata'
+            }
+        } 
+        // 2️⃣ Multicast JSON Wrapper: {"payload":"<hex>"}
+        else if (raw.startsWith('{"payload":"')) {
+            try {
+                def wrapper = new groovy.json.JsonSlurper().parseText(raw)
+                String inner = wrapper?.payload?.toString()?.trim()
+                if (inner && inner.matches('^[0-9A-Fa-f]+$')) {
+                    jsonString = new String(hubitat.helper.HexUtils.hexStringToByteArray(inner), 'UTF-8')
+                    log.debug '[Connector] Decoded from multicast wrapper'
+                } else {
+                    jsonString = inner ?: raw
+                }
+            } catch (e) {
+                log.warn '[Connector] Multicast wrapper parse failed: ' + e.message
+            }
+        } 
+        // 3️⃣ Raw Hex String
+        else if (raw.matches('^[0-9A-Fa-f]+$') && raw.length() % 2 == 0) {
+            jsonString = new String(hubitat.helper.HexUtils.hexStringToByteArray(raw), 'UTF-8')
+            log.debug '[Connector] Decoded from raw hex'
+        }
+
+         // ✅ Mark bridge online on ANY valid response
+        state.lastBridgeResponseTime = now()
+        if (device.currentValue('bridgeStatus') != 'online') {
+            state.bridgeStatus = 'online'
+            sendEvent(name: 'bridgeStatus', value: 'online')
+        }
+
+        // 4️⃣ Parse & Route
+        def json = new groovy.json.JsonSlurper().parseText(jsonString)
+        def msgType = json?.msgType
+        if (!msgType) {
+            log.warn '[Connector] msgType is null'
+            return
+        }
+
+        switch (msgType) {
+            case 'GetDeviceListAck': handleGetDeviceListAck(json); break
+            case 'Heartbeat':
+                log.info '[Connector] ❤️ HEARTBEAT RECEIVED! State: ' + json.data?.currentState + ', Devices: ' + json.data?.numberOfDevices + ', RSSI: ' + json.data?.RSSI
+                handleHeartbeat(json)
+                break
+            case 'ReadDeviceAck': handleReadDeviceAck(json); break
+            case 'WriteDeviceAck': handleWriteDeviceAck(json); break
+            case 'Report': handleReport(json); break
+            default: log.debug '[Connector] Unknown msgType: ' + msgType
+        }
+    } catch (Exception e) {
+        log.error '[Connector] parse() fatal: ' + e.message
     }
 }
-
 /* --------------------------------------------------
    MESSAGE HANDLERS
 -------------------------------------------------- */
